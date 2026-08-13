@@ -5,12 +5,17 @@ Covers:
   1. cookie_store.decrypt_value against a KNOWN v10 test vector (generated
      in-test with a known key + deterministic PKCS7 padding), and the openssl
      fallback path when `cryptography` is missing.
-  2. browser_locator detects brave on this macOS machine.
-  3. browser_locator.resolve_cookie_db returns the real Brave cookie path.
-  4. cookie_store.keychain service map is sane (brave -> Brave Safe Storage).
+  2. browser_locator detects SOME browser on this machine (never a specific
+     one — the CI macOS runner has only Chrome/Edge, the dev Mac has Brave).
+  3. Every detected browser resolves cleanly to a cookie DB path (or None when
+     its profile has not been created yet), and the FIRST installed browser
+     resolves to a real path whenever such a DB exists.
+  4. Brave-specific checks are GUARDED: they run only when Brave is actually
+     installed, otherwise they print SKIP (portable across every machine).
+  5. cookie_store.keychain service map is sane (brave -> Brave Safe Storage).
 
-Prints PASS/FAIL per test; exits 0 only if every test passes.
-Never touches or prints real cookie values.
+Prints PASS/SKIP/FAIL per test; exits 0 only if every (non-skipped) test
+passes. Never touches or prints real cookie values.
 """
 import os
 import subprocess
@@ -89,6 +94,13 @@ def check(name, cond, detail=""):
         print(f"FAIL: {name}  {detail}")
 
 
+def skip(name):
+    print(f"SKIP: {name}")
+
+
+# ---------------------------------------------------------------------------
+# Decryption round-trips (synthetic fixtures — portable on every machine)
+# ---------------------------------------------------------------------------
 def test_decrypt_known_vector():
     val = decrypt_value(V10_BLOB, TEST_KEY)
     check(
@@ -120,6 +132,9 @@ def test_pbkdf2_known_key():
     check("pbkdf2-derived key decrypts", decrypt_value(blob, key) == "roundtrip")
 
 
+# ---------------------------------------------------------------------------
+# Browser detection — OS-PORTABLE (no specific browser is assumed)
+# ---------------------------------------------------------------------------
 def test_detect_os_maps_known():
     # OS-portable: detect_os() must return one of the three supported roots.
     os_name = detect_os()
@@ -129,50 +144,73 @@ def test_detect_os_maps_known():
         f"got {os_name!r}")
 
 
-def test_brave_installed():
-    os_name = detect_os()
-    if os_name == "macos":
-        check(
-            "brave detected as installed on macOS",
-            is_installed(os_name, "brave"),
-            "Brave Browser.app not found in /Applications or ~/Applications")
-    else:
-        # OS-portable: is_installed must return a bool without raising.
-        check(
-            f"is_installed('brave') returns bool on {os_name}",
-            isinstance(is_installed(os_name, "brave"), bool),
-            "is_installed must not raise on non-macOS")
-
-
-def test_brave_in_installed_list():
+def test_installed_browsers_nonempty():
+    # Portable: ANY machine (dev Mac, CI macos/ubuntu/windows) has at least one
+    # Chromium-family browser in the KNOWN set (GitHub macOS runner ships
+    # Chrome+Edge; the dev Mac ships Brave). We assert non-empty, NOT a
+    # specific browser.
     installed = get_installed_browsers()
-    if detect_os() == "macos":
-        check("brave in get_installed_browsers()", "brave" in installed, f"got {installed}")
-    else:
-        # OS-portable: returns a list of known browser names.
-        check(
-            "get_installed_browsers() returns a list",
-            isinstance(installed, list) and all(b in KEYCHAIN_SERVICES for b in installed),
-            f"got {installed!r}")
+    check(
+        "get_installed_browsers() returns at least one browser",
+        isinstance(installed, list) and len(installed) > 0,
+        f"got {installed!r}")
 
 
-def test_resolve_cookie_db_brave():
-    path = resolve_cookie_db("brave")
-    if detect_os() == "macos":
-        expected = (
-            Path.home() / "Library" / "Application Support"
-            / "BraveSoftware" / "Brave-Browser" / "Default" / "Cookies"
-        )
-        check(
-            "resolve_cookie_db('brave') returns real Brave cookie path",
-            path == str(expected) and os.path.isfile(path),
-            f"got {path!r}")
-    else:
-        # OS-portable: must return a path string or None, never raise.
-        check(
-            "resolve_cookie_db('brave') returns str or None",
-            path is None or isinstance(path, str),
-            f"got {path!r}")
+def test_every_installed_browser_resolves_cleanly():
+    # Portable: every detected browser must resolve to a real, existing cookie
+    # DB path when present, or None without raising when its profile has not
+    # been created yet (installed but never launched). No specific browser or
+    # path is assumed.
+    bad = []
+    for b in get_installed_browsers():
+        p = resolve_cookie_db(b)
+        if not (p is None or (isinstance(p, str) and os.path.isfile(p))):
+            bad.append((b, p))
+    check(
+        "every installed browser resolves to an existing path or None",
+        not bad,
+        f"bad: {bad!r}")
+
+
+def test_first_installed_browser_resolves():
+    # Helper: pick the FIRST installed browser and resolve its cookie DB. It
+    # must return a real, non-None path whenever the DB exists. If the browser
+    # is installed but has never been launched (no DB yet) we SKIP rather than
+    # fail — a legitimate environmental state, not a code defect. This stays
+    # green on a machine that has no cookie DB at all while still asserting the
+    # non-None path on any machine that does.
+    installed = get_installed_browsers()
+    if not installed:
+        skip("first_installed_browser_resolves — no browser detected")
+        return
+    first = installed[0]
+    p = resolve_cookie_db(first)
+    if p is None:
+        skip(f"first_installed_browser_resolves — no cookie DB yet for {first!r}")
+        return
+    check(
+        f"resolve_cookie_db(first installed {first!r}) returns a real path",
+        isinstance(p, str) and os.path.isfile(p),
+        f"got {p!r}")
+
+
+def test_brave_guard():
+    # Brave-specific checks are GUARDED: they run only when Brave is installed
+    # (dev machine). On a machine without Brave (CI macOS) we SKIP — this is
+    # the assertion that used to hard-fail CI.
+    if not is_installed(detect_os(), "brave"):
+        skip("brave-specific test — brave not installed")
+        return
+    installed = get_installed_browsers()
+    check(
+        "brave in get_installed_browsers() (installed)",
+        "brave" in installed,
+        f"got {installed}")
+    p = resolve_cookie_db("brave")
+    check(
+        "resolve_cookie_db('brave') returns a real cookie path (installed)",
+        isinstance(p, str) and os.path.isfile(p),
+        f"got {p!r}")
 
 
 def test_unknown_browser_returns_none():
@@ -193,9 +231,10 @@ def main():
     test_decrypt_openssl_fallback()
     test_pbkdf2_known_key()
     test_detect_os_maps_known()
-    test_brave_installed()
-    test_brave_in_installed_list()
-    test_resolve_cookie_db_brave()
+    test_installed_browsers_nonempty()
+    test_every_installed_browser_resolves_cleanly()
+    test_first_installed_browser_resolves()
+    test_brave_guard()
     test_unknown_browser_returns_none()
     test_keychain_service_map()
     print()

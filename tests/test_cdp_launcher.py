@@ -3,14 +3,17 @@
 
 Covers (all OS-portable — no live browser session, no real login):
   1. find_free_port() returns an int > 0 that is actually bindable.
-  2. locate_browser_binary('brave') returns a real path on macOS (where Brave
-     is the reference install); on Linux/Windows CI it must return a valid
-     path, or None without raising (portable guard by OS).
+  2. locate_browser_binary('brave') is GUARDED: it must resolve to a real
+     executable only when Brave is installed, otherwise it SKIPs. The real
+     portable assertion is locate_browser_binary(first installed browser) —
+     an installed browser always has an executable on any OS (dev Mac, CI
+     macos/ubuntu/windows).
   3. locate_browser_binary on an unknown browser returns None.
   4. cleanup() tolerates a finished/dead process and a missing profile dir
      (no pkill anywhere).
 
-Prints PASS/FAIL per test; exits 0 only if every test passes.
+Prints PASS/SKIP/FAIL per test; exits 0 only if every (non-skipped) test
+passes.
 """
 import socket
 import sys
@@ -19,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from browser_locator import detect_os
+from browser_locator import detect_os, get_installed_browsers, is_installed
 from cdp_launcher import find_free_port, locate_browser_binary, cleanup
 
 PASS = []
@@ -55,23 +58,35 @@ def test_find_free_port_bindable():
     check("find_free_port port is bindable", bindable, f"port={port}")
 
 
-def test_locate_browser_binary_brave():
-    os_name = detect_os()
+def test_locate_browser_binary_brave_guarded():
+    # Brave is the reference install on the dev machine but NOT on CI.
+    # Guard the brave-specific check: run only when Brave is installed,
+    # otherwise SKIP (portable across every machine).
+    if not is_installed(detect_os(), "brave"):
+        print("SKIP: locate_browser_binary('brave') — brave not installed")
+        return
     path = locate_browser_binary("brave")
-    if os_name == "macos":
-        # Reference machine: Brave is installed, must resolve to a real binary.
-        check(
-            "locate_browser_binary('brave') returns a real path on macOS",
-            isinstance(path, str) and Path(path).is_file(),
-            f"got {path!r}")
-    else:
-        # Portable on CI (Linux/Windows): either a real path, or None if Brave
-        # is not installed there — never an exception.
-        ok = path is None or (isinstance(path, str) and Path(path).is_file())
-        check(
-            f"locate_browser_binary('brave') is a path or None on {os_name}",
-            ok,
-            f"got {path!r}")
+    check(
+        "locate_browser_binary('brave') returns a real executable (installed)",
+        isinstance(path, str) and Path(path).is_file(),
+        f"got {path!r}")
+
+
+def test_locate_first_installed_browser():
+    # Portable: the auto/first-installed browser must always resolve to a real
+    # executable on ANY machine (dev Mac, CI macos/ubuntu/windows). An installed
+    # browser is guaranteed to have an executable, so this is a hard assertion —
+    # no specific browser is assumed.
+    installed = get_installed_browsers()
+    if not installed:
+        print("SKIP: locate first installed browser — no browser detected")
+        return
+    first = installed[0]
+    path = locate_browser_binary(first)
+    check(
+        f"locate_browser_binary({first!r} [first installed]) returns a real executable",
+        isinstance(path, str) and Path(path).is_file(),
+        f"got {path!r}")
 
 
 def test_locate_unknown_browser_none():
@@ -140,7 +155,8 @@ def test_cleanup_keeps_profile_when_keep_true():
 def main():
     test_find_free_port_positive_int()
     test_find_free_port_bindable()
-    test_locate_browser_binary_brave()
+    test_locate_browser_binary_brave_guarded()
+    test_locate_first_installed_browser()
     test_locate_unknown_browser_none()
     test_cleanup_dead_proc_and_missing_dir()
     test_cleanup_removes_profile_when_keep_false()
