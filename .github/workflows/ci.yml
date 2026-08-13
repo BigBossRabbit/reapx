@@ -7,6 +7,36 @@ on:
     branches: [main]
 
 jobs:
+  # v2 unit tests — OS-portable, no live X session / no real login.
+  # Runs the portability layer's unit tests on all three desktop OSes.
+  unit-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run cookie-store unit tests
+        run: python3 tests/test_cookie_store.py
+
+      - name: Run config unit tests
+        run: python3 tests/test_config.py
+
+      - name: Run cdp-launcher unit tests
+        run: python3 tests/test_cdp_launcher.py
+
+  # v1 pipeline smoke test (no browser / no live session needed) — kept.
   smoke:
     runs-on: ubuntu-latest
     steps:

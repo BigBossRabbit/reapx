@@ -120,34 +120,59 @@ def test_pbkdf2_known_key():
     check("pbkdf2-derived key decrypts", decrypt_value(blob, key) == "roundtrip")
 
 
-def test_detect_os_is_macos():
+def test_detect_os_maps_known():
+    # OS-portable: detect_os() must return one of the three supported roots.
     os_name = detect_os()
-    check("detect_os() == 'macos' on this machine", os_name == "macos", f"got {os_name}")
+    check(
+        "detect_os() returns a supported OS root",
+        os_name in ("macos", "linux", "windows"),
+        f"got {os_name!r}")
 
 
 def test_brave_installed():
     os_name = detect_os()
-    check(
-        "brave detected as installed on macOS",
-        is_installed(os_name, "brave"),
-        "Brave Browser.app not found in /Applications or ~/Applications")
+    if os_name == "macos":
+        check(
+            "brave detected as installed on macOS",
+            is_installed(os_name, "brave"),
+            "Brave Browser.app not found in /Applications or ~/Applications")
+    else:
+        # OS-portable: is_installed must return a bool without raising.
+        check(
+            f"is_installed('brave') returns bool on {os_name}",
+            isinstance(is_installed(os_name, "brave"), bool),
+            "is_installed must not raise on non-macOS")
 
 
 def test_brave_in_installed_list():
     installed = get_installed_browsers()
-    check("brave in get_installed_browsers()", "brave" in installed, f"got {installed}")
+    if detect_os() == "macos":
+        check("brave in get_installed_browsers()", "brave" in installed, f"got {installed}")
+    else:
+        # OS-portable: returns a list of known browser names.
+        check(
+            "get_installed_browsers() returns a list",
+            isinstance(installed, list) and all(b in KEYCHAIN_SERVICES for b in installed),
+            f"got {installed!r}")
 
 
 def test_resolve_cookie_db_brave():
     path = resolve_cookie_db("brave")
-    expected = (
-        Path.home() / "Library" / "Application Support"
-        / "BraveSoftware" / "Brave-Browser" / "Default" / "Cookies"
-    )
-    check(
-        "resolve_cookie_db('brave') returns real Brave cookie path",
-        path == str(expected) and os.path.isfile(path),
-        f"got {path!r}")
+    if detect_os() == "macos":
+        expected = (
+            Path.home() / "Library" / "Application Support"
+            / "BraveSoftware" / "Brave-Browser" / "Default" / "Cookies"
+        )
+        check(
+            "resolve_cookie_db('brave') returns real Brave cookie path",
+            path == str(expected) and os.path.isfile(path),
+            f"got {path!r}")
+    else:
+        # OS-portable: must return a path string or None, never raise.
+        check(
+            "resolve_cookie_db('brave') returns str or None",
+            path is None or isinstance(path, str),
+            f"got {path!r}")
 
 
 def test_unknown_browser_returns_none():
@@ -167,7 +192,7 @@ def main():
     test_decrypt_known_vector()
     test_decrypt_openssl_fallback()
     test_pbkdf2_known_key()
-    test_detect_os_is_macos()
+    test_detect_os_maps_known()
     test_brave_installed()
     test_brave_in_installed_list()
     test_resolve_cookie_db_brave()

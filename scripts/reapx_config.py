@@ -39,6 +39,11 @@ def build_parser():
                    help="CDP port; 0 = auto-free (default: 0)")
     p.add_argument("--output", default=None,
                    help="output JSON path (default: data/x_bookmarks.json)")
+    p.add_argument("--keep-profile", action="store_true",
+                   help="keep the temp CDP profile dir after run (debugging)")
+    p.add_argument("--max-scrolls", default=None, type=int,
+                   help="upper bound on infinite-load scroll iterations "
+                        "(default: 500)")
     return p
 
 
@@ -69,11 +74,16 @@ def load_config(argv=None):
     if browser == "auto":
         browser = auto_resolve_browser()
 
+    max_scrolls = args.max_scrolls if args.max_scrolls is not None \
+        else int(_env("REAPX_MAX_SCROLLS", "500"))
+
     return argparse.Namespace(
         browser=browser,
         profile=profile,
         port=port,
         output=output,
+        keep_profile=bool(args.keep_profile),
+        max_scrolls=max_scrolls,
         raw=args,
     )
 
