@@ -2,27 +2,34 @@
 """fetch_x_bookmarks.py — production fetcher for the user's X (Twitter) bookmarks.
 
 Architecture (no paid X API):
-  1. Copy the live Brave 'Default/Cookies' SQLite file into a fresh temp profile
+  1. Resolve the browser + profile from config (reapx_config), then copy that
+     browser's live 'Cookies' SQLite file into a fresh temp profile
      (READ-ONLY on the source; non-destructive). This carries the authenticated
      x.com session natively — X accepts it exactly as the real browser would.
-  2. Launch headless Brave over CDP (port 9222) against that copied profile.
+  2. Locate the browser binary + launch headless over CDP (cdp_launcher) on a
+     FREE port (never the hardcoded 9222) against that copied profile.
   3. Navigate to https://x.com/i/history, then repeatedly scroll to the bottom
      to trigger X's infinite load, collecting every <article> bookmark.
   4. Extract per tweet: id, full text, author screen_name, created_at, URLs.
-  5. Write data/x_bookmarks.json (idempotent, deduped by id, atomic write).
+  5. Write the configured output JSON (idempotent, deduped by id, atomic write).
+
+Fully config-driven + cross-browser + cross-platform:
+    --browser brave|chrome|edge|arc|opera|auto   (auto = first installed)
+    --profile <profile dir name>                 (default 'Default')
+    --port <int>                                  (0 = auto-free)
+    --output <path>
+    --keep-profile                                (keep temp CDP profile; debug)
+    --max-scrolls <int>                           (default 500)
 
 Cookie VALUES are never printed, logged, or persisted. The source cookie DB is
-opened read-only (a copy is made; the original is never touched).
+opened read-only (a copy is made; the original is never touched). The session
+verification contract (auth_token, ct0, _twitter_sess) is preserved.
 """
 import json
 import os
-import re
 import shutil
-import subprocess
 import sys
 import time
-import sqlite3
-import hashlib
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -32,102 +39,34 @@ try:
 except ImportError:
     sys.exit("ERROR: 'websocket-client' is required. Run: pip3 install websocket-client")
 
+# v2 portability layer.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from browser_locator import resolve_cookie_db, get_installed_browsers
+import cookie_store
+import cdp_launcher
+from reapx_config import load_config, auto_resolve_browser
+
 # ----------------------------------------------------------------------------
-# Configuration
+# Runtime constants (behavior; browser/OS specifics are config-driven).
 # ----------------------------------------------------------------------------
-BRAVE_DIR = "/Users/fromthejump/Library/Application Support/BraveSoftware/Brave-Browser"
-DEFAULT_PROFILE = os.path.join(BRAVE_DIR, "Default")
-COOKIE_DB = os.path.join(DEFAULT_PROFILE, "Cookies")
-KEYCHAIN_SERVICES = ["Brave Safe Storage", "Chrome Safe Storage"]
-BRAVE = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
-PORT = 9222
-PROFILE = "/tmp/bravex_cdp_profile"
 X_HISTORY_URL = "https://x.com/i/history"
-MAX_SCROLLS = 500         # upper bound on infinite-load iterations (deep histories)
 SCROLL_WAIT = 1.8         # seconds between scrolls (rate-limit politely)
 CONSECUTIVE_EXHAUST = 10  # consecutive iterations with no scrollHeight growth => end
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-OUTPUT_FILE = DATA_DIR / "x_bookmarks.json"
 
 # ----------------------------------------------------------------------------
-# Cookie verification (names only — values never printed) + read-only DB access
+# Session verification (names only — values never printed) + cookie access
 # ----------------------------------------------------------------------------
-def get_keychain_pass(service):
-    r = subprocess.run(
-        ["security", "find-generic-password", "-w", "-s", service],
-        capture_output=True, text=True, check=True)
-    return r.stdout.rstrip("\n")
-
-
-def aes_cbc_decrypt(ct, key, iv):
-    """AES-128-CBC no-padding decrypt of ct (bytes) via openssl."""
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        f.write(ct)
-        tmp = f.name
-    try:
-        r = subprocess.run(
-            ["openssl", "enc", "-d", "-aes-128-cbc", "-nopad",
-             "-K", key.hex(), "-iv", iv.hex(), "-in", tmp],
-            capture_output=True)
-        return r.stdout if r.returncode == 0 else None
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-
-def decrypt_value(encrypted_value, key):
-    if not encrypted_value or encrypted_value[:3] not in (b"v10", b"v11"):
-        return None
-    raw = aes_cbc_decrypt(encrypted_value[3:], key, b" " * 16)
-    if not raw:
-        return None
-    pad = raw[-1]
-    if 1 <= pad <= 16 and pad <= len(raw):
-        raw = raw[:-pad]
-    return raw.decode("utf-8", "replace")
-
-
-def resolve_key():
-    """Return (service_name, pbkdf2_key) or raise. Tries Brave then Chrome."""
-    last_err = None
-    for service in KEYCHAIN_SERVICES:
-        try:
-            pw = get_keychain_pass(service).encode()
-            key = hashlib.pbkdf2_hmac("sha1", pw, b"saltysalt", 1003, 16)
-            print(f"[fetch_x_bookmarks] Keychain service: '{service}'")
-            return service, key
-        except subprocess.CalledProcessError as e:
-            last_err = e
-            continue
-    raise RuntimeError(f"No usable Keychain service: {last_err}")
-
-
-def read_x_cookies():
-    """Decrypt all x.com/twitter.com cookies. Returns {name: value} in-memory only.
+def read_x_cookies(browser="auto", profile="Default"):
+    """Decrypt all x.com/twitter.com cookies -> {name: value}, in-memory only.
 
     Used by verify_x_bookmarks.py to prove the session is decryptable. Values
-    are never printed or persisted.
+    are never printed or persisted. Enforces the session-verification contract
+    (auth_token, ct0, _twitter_sess present).
     """
-    _svc, key = resolve_key()
-    if not os.path.exists(COOKIE_DB):
-        raise RuntimeError(f"Cookie DB not found: {COOKIE_DB}")
-    con = sqlite3.connect(f"file:{COOKIE_DB}?mode=ro", uri=True)
-    cur = con.cursor()
-    cookies = {}
-    try:
-        cur.execute(
-            "SELECT host_key, name, encrypted_value FROM cookies "
-            "WHERE host_key LIKE '%x.com%' OR host_key LIKE '%twitter.com%'")
-        for host, name, enc in cur.fetchall():
-            if name in cookies:
-                continue
-            val = decrypt_value(enc, key)
-            if val is not None:
-                cookies[name] = val
-    finally:
-        con.close()
+    if browser == "auto":
+        browser = auto_resolve_browser()
+    cookies = cookie_store.read_cookies(
+        browser, profile, domains=["x.com", "twitter.com"])
     for required in ("auth_token", "ct0", "_twitter_sess"):
         if required not in cookies:
             raise RuntimeError(
@@ -136,45 +75,28 @@ def read_x_cookies():
 
 
 # ----------------------------------------------------------------------------
-# Headless Brave + CDP
+# Temp profile + headless CDP launch (v2: cdp_launcher, no pkill / no 9222)
 # ----------------------------------------------------------------------------
-def prepare_profile():
-    """Build a fresh profile at PROFILE carrying the live session's Cookies.
+def prepare_profile(cookie_db):
+    """Copy a browser's live Cookies DB into a fresh temp user-data-dir.
 
-    Copies only the Cookies SQLite file (non-destructive read of the source).
+    Returns the temp profile dir path. The source Cookies file is opened with
+    copy2 (read-only on source, non-destructive); the temp dir is removed by
+    cdp_launcher.cleanup unless --keep-profile is set.
     """
-    subprocess.run(["pkill", "-9", "-f", "bravex_cdp_profile"], capture_output=True)
-    time.sleep(1)
-    subprocess.run(["rm", "-rf", PROFILE])
-    default_dir = os.path.join(PROFILE, "Default")
+    tmp = tempfile.mkdtemp(prefix="reapx_cdp_profile_")
+    default_dir = os.path.join(tmp, "Default")
     os.makedirs(default_dir, exist_ok=True)
-    if not os.path.exists(COOKIE_DB):
-        raise RuntimeError(f"Source cookie DB not found: {COOKIE_DB}")
-    shutil.copy2(COOKIE_DB, os.path.join(default_dir, "Cookies"))
-    return PROFILE
+    if not cookie_db or not os.path.exists(cookie_db):
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise RuntimeError(f"Source cookie DB not found: {cookie_db}")
+    shutil.copy2(cookie_db, os.path.join(default_dir, "Cookies"))
+    return tmp
 
 
-def launch_brave():
-    """Launch headless Brave on the prepared profile at PORT; return (proc, version)."""
-    proc = subprocess.Popen(
-        [BRAVE, f"--remote-debugging-port={PORT}", f"--user-data-dir={PROFILE}",
-         "--headless=new", "--no-first-run", "--no-default-browser-check",
-         "--disable-gpu", "--window-size=1280,2400", "--remote-allow-origins=*",
-         "about:blank"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # Wait for CDP — try IPv6 then IPv4 (Brave may bind only one).
-    for _ in range(60):
-        for base in ("http://[::1]:%d" % PORT, "http://127.0.0.1:%d" % PORT):
-            try:
-                with urllib.request.urlopen(base + "/json/version", timeout=2) as r:
-                    return proc, json.loads(r.read())
-            except Exception:
-                continue
-        time.sleep(0.5)
-    proc.terminate()
-    raise RuntimeError("CDP endpoint never came up on port %d" % PORT)
-
-
+# ----------------------------------------------------------------------------
+# Headless CDP (identical client to v1)
+# ----------------------------------------------------------------------------
 class CDP:
     """Minimal CDP client over a single websocket connection."""
 
@@ -215,16 +137,39 @@ def js(page, expression):
     return res.get("result", {}).get("result", {}).get("value")
 
 
-def new_page(browser):
+def wait_for_cdp(port, timeout=30):
+    """Poll the CDP HTTP endpoint until it answers; return the /json/version dict.
+
+    Tries IPv6 then IPv4 (browsers may bind only one). Raises RuntimeError on
+    timeout.
+    """
+    for _ in range(int(timeout / 0.5)):
+        for base in ("http://[::1]:%d" % port, "http://127.0.0.1:%d" % port):
+            try:
+                with urllib.request.urlopen(base + "/json/version", timeout=2) as r:
+                    return json.loads(r.read())
+            except Exception:
+                continue
+        time.sleep(0.5)
+    raise RuntimeError("CDP endpoint never came up on port %d" % port)
+
+
+def new_page(browser, port):
     """Create a page target and return its CDP client."""
     tgt = browser.send("Target.createTarget", {"url": "about:blank"})["result"]["targetId"]
     page_ws = None
     for _ in range(20):
-        with urllib.request.urlopen("http://[::1]:%d/json" % PORT, timeout=3) as r:
-            for t in json.loads(r.read()):
-                if t.get("id") == tgt:
-                    page_ws = t["webSocketDebuggerUrl"]
-                    break
+        for base in ("http://[::1]:%d" % port, "http://127.0.0.1:%d" % port):
+            try:
+                with urllib.request.urlopen(base + "/json", timeout=3) as r:
+                    for t in json.loads(r.read()):
+                        if t.get("id") == tgt:
+                            page_ws = t["webSocketDebuggerUrl"]
+                            break
+            except Exception:
+                continue
+            if page_ws:
+                break
         if page_ws:
             break
         time.sleep(0.3)
@@ -237,7 +182,7 @@ def new_page(browser):
 
 
 # ----------------------------------------------------------------------------
-# Extraction
+# Extraction (identical to v1 — do NOT regress the 128-bookmark harvest)
 # ----------------------------------------------------------------------------
 EXTRACT_JS = r"""
 (() => {
@@ -332,22 +277,38 @@ def scroll_to_end(page):
     return js(page, SCROLL_JS)
 
 
-def main():
-    os.makedirs(DATA_DIR, exist_ok=True)
+def main(argv=None):
+    cfg = load_config(argv)
+    browser = cfg.browser
+    profile = cfg.profile
+    output = Path(cfg.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Sanity-check session decryptable (names only) before launching.
-    cookies = read_x_cookies()
-    print(f"[fetch_x_bookmarks] Session verified: {len(cookies)} x.com cookies "
-          f"decryptable (auth_token, ct0, _twitter_sess present)")
+    # 1. Resolve cookie DB via the locator (browser-agnostic).
+    cookie_db = resolve_cookie_db(browser, profile)
+    if not cookie_db:
+        raise RuntimeError(
+            f"Cookie DB not found for browser='{browser}' profile='{profile}'. "
+            f"Installed browsers: {get_installed_browsers() or 'none'}")
 
-    # 2. Prepare profile (copy live Cookies) + launch headless Brave.
-    prepare_profile()
-    proc, version = launch_brave()
+    # 2. Sanity-check session decryptable (names only) before launching.
+    cookies = read_x_cookies(browser, profile)
+    print(f"[fetch_x_bookmarks] Session verified ({browser}/{profile}): "
+          f"{len(cookies)} x.com cookies decryptable "
+          f"(auth_token, ct0, _twitter_sess present)")
+
+    # 3. Copy live Cookies into a temp profile + launch headless on a free port.
+    profile_dir = prepare_profile(cookie_db)
+    port = cfg.port if cfg.port else cdp_launcher.find_free_port()
+    proc, _ = cdp_launcher.launch(browser, profile_dir, port)
+    browser_cdp = None
+    page = None
     try:
-        browser = CDP(version["webSocketDebuggerUrl"])
-        page = new_page(browser)
+        version = wait_for_cdp(port)
+        browser_cdp = CDP(version["webSocketDebuggerUrl"])
+        page = new_page(browser_cdp, port)
 
-        # 3. Navigate to bookmarks.
+        # 4. Navigate to bookmarks.
         page.send("Page.navigate", {"url": X_HISTORY_URL})
         time.sleep(12)
         title = js(page, "document.title")
@@ -356,16 +317,17 @@ def main():
         if "onboarding" in (href or "") or "login" in (href or ""):
             raise RuntimeError("Redirected to login — copied session not accepted")
 
-        # 4. Infinite scroll, ACCUMULATING every bookmark that passes through the
-        #    viewport. X virtualizes the timeline: only ~10-15 <article> are in
-        #    the DOM at once and older ones are destroyed as you scroll, so we
-        #    merge each iteration's DOM snapshot into a persistent dict keyed by
-        #    id. True exhaustion is detected by scroll POSITION (scrollHeight
+        # 5. Infinite scroll, ACCUMULATING every bookmark that passes through
+        #    the viewport. X virtualizes the timeline: only ~10-15 <article> are
+        #    in the DOM at once and older ones are destroyed as you scroll, so
+        #    we merge each iteration's DOM snapshot into a persistent dict keyed
+        #    by id. True exhaustion is detected by scroll POSITION (scrollHeight
         #    stops growing while pinned to the bottom), NOT by article count.
         collected = {}          # id -> bookmark (dedupe by id across scrolls)
         prev_scroll_height = 0
         no_gain = 0             # consecutive iterations with no scrollHeight growth
-        for i in range(MAX_SCROLLS):
+        max_scrolls = int(cfg.max_scrolls or 500)
+        for i in range(max_scrolls):
             st = scroll_to_end(page)
             time.sleep(SCROLL_WAIT)
 
@@ -399,16 +361,16 @@ def main():
         result = sorted(collected.values(), key=lambda x: int(x["id"]), reverse=True)
 
         # 6. Atomic write (resumable/idempotent).
-        tmp = OUTPUT_FILE.with_suffix(".json.tmp")
+        tmp = output.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(result, indent=2, ensure_ascii=False))
-        os.replace(tmp, OUTPUT_FILE)
-        print(f"[fetch_x_bookmarks] Wrote {len(result)} unique bookmarks -> {OUTPUT_FILE}")
-        browser.close()
-        page.close()
+        os.replace(tmp, output)
+        print(f"[fetch_x_bookmarks] Wrote {len(result)} unique bookmarks -> {output}")
     finally:
-        proc.terminate()
-        time.sleep(1)
-        subprocess.run(["pkill", "-9", "-f", "bravex_cdp_profile"], capture_output=True)
+        if page is not None:
+            page.close()
+        if browser_cdp is not None:
+            browser_cdp.close()
+        cdp_launcher.cleanup(proc, profile_dir, keep=cfg.keep_profile)
 
 
 if __name__ == "__main__":
