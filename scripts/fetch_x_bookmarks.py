@@ -43,8 +43,9 @@ BRAVE = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
 PORT = 9222
 PROFILE = "/tmp/bravex_cdp_profile"
 X_HISTORY_URL = "https://x.com/i/history"
-MAX_SCROLLS = 60          # upper bound on infinite-load iterations
+MAX_SCROLLS = 500         # upper bound on infinite-load iterations (deep histories)
 SCROLL_WAIT = 1.8         # seconds between scrolls (rate-limit politely)
+CONSECUTIVE_EXHAUST = 10  # consecutive iterations with no scrollHeight growth => end
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 OUTPUT_FILE = DATA_DIR / "x_bookmarks.json"
 
@@ -270,6 +271,67 @@ def extract_articles(page):
     return js(page, EXTRACT_JS)
 
 
+# Scroll to the bottom of X's actual scroll container and return its metrics.
+# X virtualizes the timeline (only ~10-15 <article> in the DOM), so exhaustion
+# must be detected by scroll POSITION / scrollHeight growth, not article count.
+# `document.scrollingElement` is used when it scrolls; otherwise the tallest
+# scrollable element is found (X uses a dedicated scroll container).
+SCROLL_JS = r"""
+(() => {
+  const se = document.scrollingElement;
+  let el = null;
+  if (se && se.scrollHeight > se.clientHeight) {
+    el = se;
+  } else {
+    let best = null, bestScore = 0;
+    document.querySelectorAll('*').forEach((e) => {
+      if (e.scrollHeight > e.clientHeight + 50 && e.scrollHeight > bestScore) {
+        bestScore = e.scrollHeight;
+        best = e;
+      }
+    });
+    el = best;
+  }
+  if (el) el.scrollTop = el.scrollHeight;   // jump to the bottom of the container
+  window.scrollTo(0, document.body.scrollHeight); // native fallback
+  let scrollTop = 0, scrollHeight = 0, clientHeight = 0;
+  if (el) {
+    scrollTop = el.scrollTop;
+    scrollHeight = el.scrollHeight;
+    clientHeight = el.clientHeight;
+  } else {
+    scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+    scrollHeight = document.body ? document.body.scrollHeight : 0;
+    clientHeight = window.innerHeight || 0;
+  }
+  // Cheap sentinel check: walk text nodes, stop at first match (no full innerText).
+  let caught_up = false;
+  if (document.body) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        return /(all caught up|no more (posts|bookmarks)|end of)/i.test(n.textContent || '')
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    caught_up = !!walker.nextNode();
+  }
+  return {
+    found: !!el,
+    scrollTop: scrollTop,
+    scrollHeight: scrollHeight,
+    clientHeight: clientHeight,
+    at_bottom: (scrollHeight - clientHeight - scrollTop) <= 2,
+    caught_up: caught_up
+  };
+})()
+"""
+
+
+def scroll_to_end(page):
+    """Scroll to the bottom of X's scroll container; return its metrics dict."""
+    return js(page, SCROLL_JS)
+
+
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -294,28 +356,47 @@ def main():
         if "onboarding" in (href or "") or "login" in (href or ""):
             raise RuntimeError("Redirected to login — copied session not accepted")
 
-        # 4. Infinite scroll to load all bookmarks.
-        prev = -1
-        stable = 0
+        # 4. Infinite scroll, ACCUMULATING every bookmark that passes through the
+        #    viewport. X virtualizes the timeline: only ~10-15 <article> are in
+        #    the DOM at once and older ones are destroyed as you scroll, so we
+        #    merge each iteration's DOM snapshot into a persistent dict keyed by
+        #    id. True exhaustion is detected by scroll POSITION (scrollHeight
+        #    stops growing while pinned to the bottom), NOT by article count.
+        collected = {}          # id -> bookmark (dedupe by id across scrolls)
+        prev_scroll_height = 0
+        no_gain = 0             # consecutive iterations with no scrollHeight growth
         for i in range(MAX_SCROLLS):
-            js(page, "window.scrollTo(0, document.body.scrollHeight); true")
+            st = scroll_to_end(page)
             time.sleep(SCROLL_WAIT)
-            n = len(extract_articles(page))
-            print(f"[fetch_x_bookmarks] scroll {i+1}: {n} bookmarks on page")
-            if n == prev:
-                stable += 1
-                if stable >= 3:      # 3 consecutive no-gain scrolls -> exhausted
+
+            # Merge whatever is currently in the DOM into the persistent store.
+            batch = extract_articles(page) or []
+            new = 0
+            for b in batch:
+                if b.get("id") not in collected:
+                    collected[b["id"]] = b
+                    new += 1
+
+            sh = int(st.get("scrollHeight") or 0)
+            at_bottom = bool(st.get("at_bottom"))
+            print(f"[fetch_x_bookmarks] scroll {i+1}: +{new} new (total "
+                  f"{len(collected)}) [scrollH={sh}, at_bottom={at_bottom}]")
+
+            # Exhaustion signals.
+            if st.get("caught_up"):
+                print("[fetch_x_bookmarks] 'All caught up' sentinel -> done")
+                break
+            if sh == prev_scroll_height and sh > 0:
+                no_gain += 1
+                if no_gain >= CONSECUTIVE_EXHAUST:
+                    print(f"[fetch_x_bookmarks] scrollHeight stable for "
+                          f"{CONSECUTIVE_EXHAUST} iterations -> reached end")
                     break
             else:
-                stable = 0
-            prev = n
+                no_gain = 0
+            prev_scroll_height = sh
 
-        # 5. Final collect + dedupe by id.
-        bookmarks = extract_articles(page)
-        seen = {}
-        for b in bookmarks:
-            seen[b["id"]] = b
-        result = sorted(seen.values(), key=lambda x: int(x["id"]), reverse=True)
+        result = sorted(collected.values(), key=lambda x: int(x["id"]), reverse=True)
 
         # 6. Atomic write (resumable/idempotent).
         tmp = OUTPUT_FILE.with_suffix(".json.tmp")

@@ -48,8 +48,11 @@ The paid X API is not required. ReapX drives your own logged-in session instead:
    key derived with PBKDF2 from the "Safe Storage" Keychain secret) purely to prove
    the session is valid.
 3. **Scrolls to load all bookmarks** — it navigates to `https://x.com/i/history`,
-   then repeatedly scrolls to the bottom to trigger X's infinite load, collecting
-   every `<article>` until no new bookmarks appear (capped at 60 scrolls, 1.8s apart).
+   then repeatedly scrolls to the bottom of X's scroll container (detected
+   dynamically) to trigger X's infinite load. Every `<article>` is accumulated as
+   it passes through the viewport — X virtualizes the timeline so only ~10-15
+   articles exist in the DOM at once — and the run stops only when scroll
+   height genuinely stops growing (capped at 500 scrolls, 1.8s apart).
 4. **Maps tweets to skill schema** — each bookmark is extracted (id, text, author,
    created_at, URLs), deduped by id, and mapped into the `starred_repos.json` schema
    that the categorize + generate stages consume unchanged.

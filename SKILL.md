@@ -97,7 +97,7 @@ fetch -> map -> categorize -> generate
   Storage" were rejected. Unlock Keychain / re-auth the session.
 - **CDP never came up on port 9222** → a stale `bravex_cdp_profile` may be running;
   the script kills it automatically, but free port 9222 if something else binds it.
-- **0 bookmarks fetched** → the scroll loop hit its cap without loading articles;
+- **0 bookmarks fetched** → the scroll loop ended without loading articles;
   check the session and retry.
 
 ## Pitfalls
