@@ -1,3 +1,5 @@
+![ReapX Banner](assets/reapx-banner.svg)
+
 # ReapX
 
 **ReapX — harvest what you saved on X.**
