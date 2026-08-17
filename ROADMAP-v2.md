@@ -1,10 +1,12 @@
-# ReapX v2 — Cross-Browser & Cross-Platform Roadmap
+# ReapX v2 — Cross-Browser & Cross-Platform (SHIPPED)
 
-Current v1 harvests X bookmarks by driving **Brave on macOS** over CDP, using
-the user's logged-in session. v2's goal: work on **any Chromium-family browser**
-and **any desktop OS** (macOS, Linux, Windows).
+> **Status: v2 is implemented and live on `main`.** This document is kept as the
+> design record. The fetcher now works on **any Chromium-family browser**
+> (Brave, Chrome, Edge, Arc, Opera) and **any desktop OS** (macOS, Linux,
+> Windows) — see `scripts/browser_locator.py`, `scripts/cdp_launcher.py`, and
+> `scripts/reapx_config.py` for the shipped implementation.
 
-## Why v1 is Brave/macOS-only (the coupling)
+## Why v1 was Brave/macOS-only (the coupling)
 The fetcher has hardcoded assumptions:
 - `BRAVE_DIR = "~/Library/Application Support/BraveSoftware/Brave-Browser"` (macOS-only path)
 - Cookie decryption key from the **macOS Keychain** (`security find-generic-password`)

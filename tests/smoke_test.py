@@ -2,8 +2,8 @@
 """smoke_test.py — CI smoke test for the ReapX pipeline.
 
 Runs the parts of the ReapX pipeline that do NOT need a live X session or a
-browser (fetch_x_bookmarks.py / verify_x_bookmarks.py require the user's logged-in
-Brave profile and cannot run on CI).
+browser (fetch_x_bookmarks.py / verify_x_bookmarks.py require the user's
+logged-in Chromium-family browser and cannot run on CI).
 
 Coverage (in-process, no network, stdlib + repo scripts):
   (a) scripts are importable / parse

@@ -9,8 +9,9 @@ smoke:
 	bash tests/run_smoke.sh
 
 # Best-effort verification of fetched X bookmarks.
-# Requires the user's logged-in Brave profile (live X session) and cannot run
-# on CI, so failures are NOT propagated: never hard-fail CI on this target.
+# Requires the user's logged-in Chromium-family browser (live X session) and
+# cannot run on CI, so failures are NOT propagated: never hard-fail CI on this
+# target.
 verify:
 	@echo "Running verify_x_bookmarks.py (best-effort; requires local X session)..."
 	@python3 scripts/verify_x_bookmarks.py || echo "verify skipped: no local X session available"

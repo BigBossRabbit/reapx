@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""map_bookmarks_to_repos.py — map X bookmarks (tweets) into StarLearner's
-'starred_repos.json' schema so the existing pipeline (categorize_repos.py +
+"""map_bookmarks_to_repos.py — map X bookmarks (tweets) into ReapX's
+'starred_repos.json' schema so the pipeline (categorize_repos.py +
 generate_skills.py) runs unchanged.
 
 Schema mapping (per bookmark/tweet):

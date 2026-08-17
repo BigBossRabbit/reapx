@@ -16,16 +16,19 @@ bookmark harvesting is what makes it a distinct project.
 
 ## What it does
 
-- Reads your X bookmarks from your logged-in Brave browser
+- Reads your X bookmarks from your logged-in browser — **any Chromium-family
+  browser** (Brave, Chrome, Edge, Arc, Opera), auto-detected
 - Maps each tweet into a skill schema (name, description, topics, source URL)
 - Categorizes them into 12 domains (AI & ML, Privacy & Security, Dev Tools, etc.)
 - Generates polished, ready-to-use `SKILL.md` files in `generated_skills/`
 
-No exporting, no CSV juggling, no manual copying.
+No exporting, no CSV juggling, no manual copying. Cross-platform: **macOS,
+Linux, and Windows**.
 
 ## How it works — 3 steps
 
-1. **Harvest** your X bookmarks from your local Brave session.
+1. **Harvest** your X bookmarks from your local browser session (auto-detected:
+   Brave → Chrome → Edge → Arc → Opera — or pass `--browser <name>`).
 2. **Map & categorize** each bookmark into a skill schema by domain.
 3. **Generate** reusable Hermes skills from templated output.
 
@@ -35,17 +38,26 @@ Run the whole thing with one command:
 bash scripts/daily_sync.sh --source bookmarks
 ```
 
+If you have several Chromium browsers installed, make sure the auto-picked one is
+the one logged into X — or be explicit:
+
+```bash
+bash scripts/daily_sync.sh --source bookmarks --browser chrome
+# or: REAPX_BROWSER=chrome bash scripts/daily_sync.sh --source bookmarks
+```
+
 ---
 
 ## How the magic works without the X API
 
 The paid X API is not required. ReapX drives your own logged-in session instead:
 
-1. **Drives your logged-in Brave session over CDP** — it copies the live Brave
-   `Cookies` SQLite file into a fresh, temporary profile (read-only on the source,
-   non-destructive) and launches a headless Brave instance on Chrome DevTools
-   Protocol (on a free port, never a hardcoded one). X accepts the session
-   exactly as it would the real browser.
+1. **Drives your logged-in browser session over CDP** — it copies the live
+   browser's `Cookies` SQLite file (Brave, Chrome, Edge, Arc, or Opera —
+   whichever you have, auto-detected) into a fresh, temporary profile
+   (read-only on the source, non-destructive) and launches a headless instance
+   on Chrome DevTools Protocol (on a free port, never a hardcoded one). X
+   accepts the session exactly as it would the real browser.
 2. **Loads your bookmarks in that session** — the headless browser uses the
    copied cookie DB to authenticate, exactly like a real browser (no Keychain
    access needed by the main pipeline). A dead/expired session is detected via
@@ -67,9 +79,11 @@ machine.
 
 ## Requirements
 
-- **macOS** — uses Brave's profile layout and CDP (the fetcher itself needs no
-  Keychain access; only the optional `verify_x_bookmarks.py` smoke test does)
-- **Brave Browser** with a **logged-in X session**
+- **macOS, Linux, or Windows** — any Chromium-family browser's profile layout is
+  auto-detected (the main pipeline needs no Keychain access; only the optional
+  `verify_x_bookmarks.py` smoke test does)
+- **Any Chromium-family browser** (Brave, Chrome, Edge, Arc, Opera) with a
+  **logged-in X session**
 - **Python 3.11+**
 - pip dependencies from `requirements.txt` (includes the fetcher's
   `websocket-client` — `pip install -r requirements.txt` installs everything):
@@ -145,12 +159,14 @@ reapx/
 
 ReapX is built to be kind to your data:
 
-- **Cookie values are never logged, printed, or committed.** The pipeline only checks
-  for the *presence* of `auth_token` and `ct0` to confirm the session decrypts.
+- **Cookie values are never logged, printed, or committed.** The optional verify
+  step only checks for the *presence* of `auth_token`, `ct0`, and
+  `_twitter_sess` to confirm the session is usable.
 - The source cookie database is opened **read-only** — a copy is made and the
-  original Brave profile is never touched.
-- Session cookies are decrypted from your **macOS Keychain** (Brave/Chrome "Safe
-  Storage") entirely in memory.
+  original browser profile is never touched.
+- Session cookies are **never decrypted by the main pipeline** — the headless
+  browser authenticates with the copied cookie DB exactly like a real browser,
+  so no Keychain access is needed.
 - All harvested data, logs, and generated output are **gitignored**
   (`data/*.json`, `logs/*.log`, `generated_skills/`), so nothing personal can be
   committed by accident.
