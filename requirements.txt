@@ -1,7 +1,9 @@
-# Requirements for StarLearner-Nexus skill
-# The skill primarily uses bash and Python with standard libraries
-# For enhanced functionality, you may want to install:
+# ReapX runtime dependencies.
+# `pip install -r requirements.txt` must install EVERYTHING the pipeline
+# needs — the X bookmark fetcher talks to the browser over CDP and requires
+# websocket-client (it is NOT optional, do not split it into a separate step).
 jinja2>=3.0.0
 PyYAML>=6.0
 requests>=2.25.0
 cryptography>=3.4
+websocket-client>=1.6.0

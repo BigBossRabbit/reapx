@@ -44,7 +44,8 @@ The paid X API is not required. ReapX drives your own logged-in session instead:
 1. **Drives your logged-in Brave session over CDP** — it copies the live Brave
    `Cookies` SQLite file into a fresh, temporary profile (read-only on the source,
    non-destructive) and launches a headless Brave instance on Chrome DevTools
-   Protocol (port 9222). X accepts the session exactly as it would the real browser.
+   Protocol (on a free port, never a hardcoded one). X accepts the session
+   exactly as it would the real browser.
 2. **Decrypts session cookies from the Brave cookie store via macOS Keychain** —
    the `auth_token`, `ct0`, and `_twitter_sess` cookies are decrypted (AES-128-CBC,
    key derived with PBKDF2 from the "Safe Storage" Keychain secret) purely to prove
@@ -68,13 +69,22 @@ machine.
 
 - **macOS** — uses Keychain and Brave's profile layout
 - **Brave Browser** with a **logged-in X session**
-- **Python 3**
-- pip dependencies from `requirements.txt`, plus the fetcher's WebSocket client:
+- **Python 3.11+**
+- pip dependencies from `requirements.txt` (includes the fetcher's
+  `websocket-client` — `pip install -r requirements.txt` installs everything):
 
 ```bash
 pip3 install -r requirements.txt
-pip3 install websocket-client
 ```
+
+> **macOS Keychain authorization (one-time):** the first time the fetcher reads
+> your Brave session it calls `security find-generic-password -s "Brave Safe
+> Storage"`. macOS will prompt *"security wants to access key 'Brave Safe
+> Storage'"* — click **Always Allow**. If you miss it (or run from cron/CI),
+> the read can hang waiting on the dialog; the fetcher now fails fast with a
+> clear message after 10s. To pre-authorize: **Keychain Access** → search
+> "Brave Safe Storage" → Get Info → Access Control → add `/usr/bin/security`
+> to "Always allow access by these applications".
 
 ---
 

@@ -96,9 +96,19 @@ def decrypt_value(encrypted_value, key):
 def resolve_key_macos(browser="brave"):
     """Return the AES key from the macOS Keychain for the browser's service."""
     service = KEYCHAIN_SERVICES.get(browser, KEYCHAIN_SERVICES["brave"])
-    r = subprocess.run(
-        ["security", "find-generic-password", "-w", "-s", service],
-        capture_output=True, text=True, check=True)
+    # timeout=10: macOS Keychain can hang indefinitely on a pending
+    # authorization prompt (SecurityAgent dialog) when run from cron/agent
+    # contexts. Fail fast with a clear error instead of blocking forever.
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-w", "-s", service],
+            capture_output=True, text=True, check=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"Keychain read for '{service}' timed out after 10s — macOS is "
+            "showing (or waiting on) a Keychain authorization prompt. "
+            "Approve it once in Keychain Access (or grant 'Always Allow') "
+            "so the agent can read the password non-interactively.")
     return pbkdf2_key_from_password(r.stdout.rstrip("\n").encode())
 
 
