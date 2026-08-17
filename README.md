@@ -77,14 +77,16 @@ machine.
 pip3 install -r requirements.txt
 ```
 
-> **macOS Keychain authorization (one-time):** the first time the fetcher reads
-> your Brave session it calls `security find-generic-password -s "Brave Safe
-> Storage"`. macOS will prompt *"security wants to access key 'Brave Safe
-> Storage'"* — click **Always Allow**. If you miss it (or run from cron/CI),
-> the read can hang waiting on the dialog; the fetcher now fails fast with a
-> clear message after 10s. To pre-authorize: **Keychain Access** → search
-> "Brave Safe Storage" → Get Info → Access Control → add `/usr/bin/security`
-> to "Always allow access by these applications".
+> **macOS Keychain authorization (one-time):** the first time the fetcher runs
+> the session sanity-check it calls `security find-generic-password -s "Brave
+> Safe Storage"`. macOS will prompt *"security wants to access key 'Brave Safe
+> Storage'"* — click **Always Allow**. The check is **non-fatal**: if the
+> Keychain read hangs (e.g. running from cron/CI where the dialog can't be
+> approved) or fails, the fetcher logs a warning and continues — the actual
+> bookmark fetch uses the copied cookie DB via headless CDP and does not depend
+> on this check. To pre-authorize: **Keychain Access** → search "Brave Safe
+> Storage" → Get Info → Access Control → add `/usr/bin/security` to "Always
+> allow access by these applications".
 
 ---
 

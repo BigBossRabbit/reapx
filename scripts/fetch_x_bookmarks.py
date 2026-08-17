@@ -291,11 +291,21 @@ def main(argv=None):
             f"Cookie DB not found for browser='{browser}' profile='{profile}'. "
             f"Installed browsers: {get_installed_browsers() or 'none'}")
 
-    # 2. Sanity-check session decryptable (names only) before launching.
-    cookies = read_x_cookies(browser, profile)
-    print(f"[fetch_x_bookmarks] Session verified ({browser}/{profile}): "
-          f"{len(cookies)} x.com cookies decryptable "
-          f"(auth_token, ct0, _twitter_sess present)")
+    # 2. Best-effort session sanity check (names only) before launching.
+    #    Non-fatal BY DESIGN: the Keychain read can hang on a pending macOS
+    #    authorization prompt (SecurityAgent dialog) when run from cron, CI,
+    #    or a fresh machine. The real fetch happens below via the copied
+    #    cookie DB + headless browser over CDP, so a decryption failure here
+    #    must NEVER block the pipeline. We log a clear warning and continue.
+    try:
+        cookies = read_x_cookies(browser, profile)
+        print(f"[fetch_x_bookmarks] Session verified ({browser}/{profile}): "
+              f"{len(cookies)} x.com cookies decryptable "
+              f"(auth_token, ct0, _twitter_sess present)")
+    except Exception as exc:
+        print(f"[fetch_x_bookmarks] WARNING: session sanity-check skipped "
+              f"({exc}). Continuing — the headless CDP fetch uses the copied "
+              f"cookie DB directly and does not depend on this check.")
 
     # 3. Copy live Cookies into a temp profile + launch headless on a free port.
     profile_dir = prepare_profile(cookie_db)
