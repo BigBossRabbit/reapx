@@ -42,7 +42,6 @@ except ImportError:
 # v2 portability layer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from browser_locator import resolve_cookie_db, get_installed_browsers
-import cookie_store
 import cdp_launcher
 from reapx_config import load_config, auto_resolve_browser
 
@@ -52,27 +51,6 @@ from reapx_config import load_config, auto_resolve_browser
 X_HISTORY_URL = "https://x.com/i/history"
 SCROLL_WAIT = 1.8         # seconds between scrolls (rate-limit politely)
 CONSECUTIVE_EXHAUST = 10  # consecutive iterations with no scrollHeight growth => end
-
-# ----------------------------------------------------------------------------
-# Session verification (names only — values never printed) + cookie access
-# ----------------------------------------------------------------------------
-def read_x_cookies(browser="auto", profile="Default"):
-    """Decrypt all x.com/twitter.com cookies -> {name: value}, in-memory only.
-
-    Used by verify_x_bookmarks.py to prove the session is decryptable. Values
-    are never printed or persisted. Enforces the session-verification contract
-    (auth_token, ct0, _twitter_sess present).
-    """
-    if browser == "auto":
-        browser = auto_resolve_browser()
-    cookies = cookie_store.read_cookies(
-        browser, profile, domains=["x.com", "twitter.com"])
-    for required in ("auth_token", "ct0", "_twitter_sess"):
-        if required not in cookies:
-            raise RuntimeError(
-                f"Required cookie '{required}' missing — is the session logged in?")
-    return cookies
-
 
 # ----------------------------------------------------------------------------
 # Temp profile + headless CDP launch (v2: cdp_launcher, no pkill / no 9222)
@@ -291,21 +269,13 @@ def main(argv=None):
             f"Cookie DB not found for browser='{browser}' profile='{profile}'. "
             f"Installed browsers: {get_installed_browsers() or 'none'}")
 
-    # 2. Best-effort session sanity check (names only) before launching.
-    #    Non-fatal BY DESIGN: the Keychain read can hang on a pending macOS
-    #    authorization prompt (SecurityAgent dialog) when run from cron, CI,
-    #    or a fresh machine. The real fetch happens below via the copied
-    #    cookie DB + headless browser over CDP, so a decryption failure here
-    #    must NEVER block the pipeline. We log a clear warning and continue.
-    try:
-        cookies = read_x_cookies(browser, profile)
-        print(f"[fetch_x_bookmarks] Session verified ({browser}/{profile}): "
-              f"{len(cookies)} x.com cookies decryptable "
-              f"(auth_token, ct0, _twitter_sess present)")
-    except Exception as exc:
-        print(f"[fetch_x_bookmarks] WARNING: session sanity-check skipped "
-              f"({exc}). Continuing — the headless CDP fetch uses the copied "
-              f"cookie DB directly and does not depend on this check.")
+    # 2. (No Keychain check here — by design.) The fetch below runs the copied
+    #    cookie DB through a headless browser over CDP, which authenticates
+    #    exactly like a real browser and detects a dead session via the
+    #    login-redirect check after navigation. A separate Keychain decryption
+    #    pre-check would add a macOS-only dependency that can hang on an
+    #    authorization prompt (cron/CI/fresh machines) for zero benefit.
+    #    Use scripts/verify_x_bookmarks.py for an explicit decryptability test.
 
     # 3. Copy live Cookies into a temp profile + launch headless on a free port.
     profile_dir = prepare_profile(cookie_db)

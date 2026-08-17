@@ -46,10 +46,10 @@ The paid X API is not required. ReapX drives your own logged-in session instead:
    non-destructive) and launches a headless Brave instance on Chrome DevTools
    Protocol (on a free port, never a hardcoded one). X accepts the session
    exactly as it would the real browser.
-2. **Decrypts session cookies from the Brave cookie store via macOS Keychain** —
-   the `auth_token`, `ct0`, and `_twitter_sess` cookies are decrypted (AES-128-CBC,
-   key derived with PBKDF2 from the "Safe Storage" Keychain secret) purely to prove
-   the session is valid.
+2. **Loads your bookmarks in that session** — the headless browser uses the
+   copied cookie DB to authenticate, exactly like a real browser (no Keychain
+   access needed by the main pipeline). A dead/expired session is detected via
+   a login-redirect check after navigation.
 3. **Scrolls to load all bookmarks** — it navigates to `https://x.com/i/history`,
    then repeatedly scrolls to the bottom of X's scroll container (detected
    dynamically) to trigger X's infinite load. Every `<article>` is accumulated as
@@ -67,7 +67,8 @@ machine.
 
 ## Requirements
 
-- **macOS** — uses Keychain and Brave's profile layout
+- **macOS** — uses Brave's profile layout and CDP (the fetcher itself needs no
+  Keychain access; only the optional `verify_x_bookmarks.py` smoke test does)
 - **Brave Browser** with a **logged-in X session**
 - **Python 3.11+**
 - pip dependencies from `requirements.txt` (includes the fetcher's
@@ -77,16 +78,18 @@ machine.
 pip3 install -r requirements.txt
 ```
 
-> **macOS Keychain authorization (one-time):** the first time the fetcher runs
-> the session sanity-check it calls `security find-generic-password -s "Brave
-> Safe Storage"`. macOS will prompt *"security wants to access key 'Brave Safe
-> Storage'"* — click **Always Allow**. The check is **non-fatal**: if the
-> Keychain read hangs (e.g. running from cron/CI where the dialog can't be
-> approved) or fails, the fetcher logs a warning and continues — the actual
-> bookmark fetch uses the copied cookie DB via headless CDP and does not depend
-> on this check. To pre-authorize: **Keychain Access** → search "Brave Safe
-> Storage" → Get Info → Access Control → add `/usr/bin/security` to "Always
-> allow access by these applications".
+> **macOS Keychain (only for the optional `verify_x_bookmarks.py` smoke test):**
+> that script proves the session is decryptable via
+> `security find-generic-password -s "Brave Safe Storage"`. macOS will prompt
+> *"security wants to access key 'Brave Safe Storage'"* — click **Always Allow**.
+> The main pipeline (`daily_sync.sh` / `fetch_x_bookmarks.py`) does **not**
+> touch the Keychain: it authenticates by running the copied cookie DB through
+> a headless browser over CDP, exactly like a real browser, and detects a dead
+> session via a login-redirect check. If the Keychain read hangs or fails,
+> only the optional verify step is affected — it fails fast with a clear
+> message (10s timeout). To pre-authorize: **Keychain Access** → search
+> "Brave Safe Storage" → Get Info → Access Control → add `/usr/bin/security`
+> to "Always allow access by these applications".
 
 ---
 
