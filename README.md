@@ -21,9 +21,38 @@ bookmark harvesting is what makes it a distinct project.
 - Maps each tweet into a skill schema (name, description, topics, source URL)
 - Categorizes them into 12 domains (AI & ML, Privacy & Security, Dev Tools, etc.)
 - Generates polished, ready-to-use `SKILL.md` files in `generated_skills/`
+- **Incremental (only-new) processing**: a persistent seen-ledger means each run
+  only counts and assesses bookmarks you have not already taken into account
+- **Two-track assessment**: every new bookmark is scored for (a) integrating into
+  your own makeup and (b) business-opportunity value, surfaced in
+  `data/opportunities.json`
 
 No exporting, no CSV juggling, no manual copying. Cross-platform: **macOS,
 Linux, and Windows**.
+
+## 🔁 Incremental Processing (seen-ledger)
+
+ReapX is **incremental by design**. It keeps a persistent ledger at
+`data/ledger.json` (gitignored) that records every bookmark already taken into
+account. On each run:
+
+1. **Harvest** the full current set of bookmarks (unchanged).
+2. **Diff** against the ledger → only **NEW** bookmarks advance.
+3. Only new bookmarks are **categorized**, **assessed** and turned into skills.
+4. New bookmarks are recorded into the ledger **only after a successful run**, so
+   a mid-run failure never marks items as seen.
+
+The result: a bookmark you have already processed is never counted again. Each
+run reports **how many are new**, what was integrated, and what is a business
+opportunity — not the total.
+
+```bash
+# See how many bookmarks have been seen so far
+python3 scripts/ledger.py report data/ledger.json
+```
+
+The ledger keys on the tweet `_bookmark_id` (a stable identity), so re-saves and
+re-fetches are handled correctly.
 
 ## How it works — 3 steps
 
@@ -123,7 +152,10 @@ bash scripts/run_reapx_3day.sh
 Outputs:
 - `data/x_bookmarks.json` — raw harvested bookmarks
 - `data/starred_repos.json` — bookmarks mapped to skill schema
+- `data/new_repos.json` — only the NEW bookmarks this run (ledger diff)
 - `data/categorized_repos.json` — domain-categorized items
+- `data/opportunities.json` — two-track assessment (integration + business opportunity)
+- `data/ledger.json` — persistent seen-ledger (incremental dedup)
 - `generated_skills/` — generated Hermes skills
 
 ---
