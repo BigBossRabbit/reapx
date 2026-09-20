@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+# Cron runs with a minimal PATH where /usr/bin/env python3 resolves to the
+# bare system Python 3.9 (no websocket-client etc.). Pin Homebrew/user paths
+# so the pipeline uses /usr/local/bin/python3 (3.11 with required packages).
+export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/Library/Python/3.11/bin:$PATH"
+
 REPO="/Users/fromthejump/reapx"
 STATE="$REPO/.last_sync_ts"
 LOG="$REPO/logs/reapx-$(date +%Y%m%d).log"
@@ -33,7 +38,8 @@ echo "$NOW" > "$STATE"
 echo "🚀 ReapX sync started $(date '+%Y-%m-%d %H:%M')"
 bash "$REPO/scripts/daily_sync.sh" > "$LOG" 2>&1
 
-# Compact summary (single line for Telegram)
-REPOS=$(grep -oE "Harvested: [0-9]+" "$LOG" | tail -1 | grep -oE "[0-9]+" || echo "?")
+# Compact summary (single line for Telegram) — reports NEW, not total.
+NEW=$(grep -oE "New this run: [0-9]+" "$LOG" | tail -1 | grep -oE "[0-9]+" || echo "0")
+OPP=$(grep -oE "Business opportunities: [0-9]+" "$LOG" | tail -1 | grep -oE "[0-9]+" || echo "0")
 SKILLS=$(find "$REPO/generated_skills" -name SKILL.md -type f 2>/dev/null | wc -l | tr -d ' ')
-echo "✅ ReapX sync done — ${REPOS} bookmarks · ${SKILLS} skills · log $LOG"
+echo "✅ ReapX sync done — ${NEW} new · ${OPP} opportunities · ${SKILLS} skills · log $LOG"
