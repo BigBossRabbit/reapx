@@ -3,10 +3,13 @@
 master scored dataset. Grow-only: only ADDS handles not already present; never
 deletes/overwrites existing enrichment."""
 import json
+from pathlib import Path
 
-SCORED = '/Users/fromthejump/reapx/data/x_crm_scored.json'
-GAP = '/Users/fromthejump/reapx/data/x_followers_gap_fill.json'
-OUT = '/Users/fromthejump/reapx/data/x_crm_scored.json'  # master (read-modify-write, grow-only)
+# Repo data dir (script lives in <repo>/scripts/).
+DATA = Path(__file__).resolve().parent.parent / 'data'
+SCORED = str(DATA / 'x_crm_scored.json')
+GAP = str(DATA / 'x_followers_gap_fill.json')
+OUT = str(DATA / 'x_crm_scored.json')  # master (read-modify-write, grow-only)
 
 def main():
     scored = json.load(open(SCORED))

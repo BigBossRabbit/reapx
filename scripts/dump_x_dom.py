@@ -7,13 +7,14 @@ import time
 import tempfile
 import shutil
 import urllib.request
+from pathlib import Path
 
 try:
     import websocket
 except ImportError:
     sys.exit("ERROR: 'websocket-client' required")
 
-sys.path.insert(0, '/Users/fromthejump/reapx/scripts')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from browser_locator import resolve_cookie_db
 from cdp_launcher import launch, find_free_port, cleanup
 
@@ -106,8 +107,8 @@ def main():
         browser_cdp = CDP(version["webSocketDebuggerUrl"])
         page = new_page(browser_cdp, port)
 
-        # Navigate to followers
-        page.send("Page.navigate", {"url": "https://x.com/OKIN_17/followers"})
+        # Navigate to the target handle's followers page
+        page.send("Page.navigate", {"url": f"https://x.com/{sys.argv[1] if len(sys.argv) > 1 else 'target-handle'}/followers"})
         time.sleep(10)
 
         # Get page info

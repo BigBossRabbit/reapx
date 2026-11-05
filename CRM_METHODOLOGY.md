@@ -1,7 +1,7 @@
 # CRM METHODOLOGY — ReapX Graph CRM
 
-**For:** @OKIN_17 (Nikolai Tjongarero)
-**Status:** Specification for Doctor Doom
+**For:** the X-graph/CRM lane (internal working doc)
+**Status:** Specification for the extraction agent
 **Data source:** `data/x_graph_v3.json` / `data/x_crm_graph.json`
 **Generated:** 2026-08-18
 
@@ -23,8 +23,8 @@
 | `is_mutual` | bool | derived | `is_follower AND is_following` |
 
 ### Graph edges available
-- `OKIN_17 -> U` : Nikolai follows U
-- `U -> OKIN_17` : U follows Nikolai
+- `OWNER -> U` : the owner follows U
+- `U -> OWNER` : U follows the owner
 - mutual = both edges present
 
 ### NOT available (do not build rules on these)
@@ -44,7 +44,7 @@
 NetworkX in-process, 8GB M1. PageRank, betweenness, Louvain, shortest path are all trivial at ~2,600 nodes.
 
 ### Topology reality check
-With 1-hop-only data the graph is a **directed star** centered on OKIN_17 plus bidirectional edges for mutuals. There are **no edges among leaf nodes** yet. This means:
+With 1-hop-only data the graph is a **directed star** centered on OWNER plus bidirectional edges for mutuals. There are **no edges among leaf nodes** yet. This means:
 - Degree, in-degree, out-degree, and PageRank are computable and meaningful.
 - Betweenness centrality on leaf nodes is **zero** (no leaf-to-leaf paths exist).
 - Community detection on leaf nodes finds **nothing** (no leaf-leaf edges to cluster).
@@ -88,7 +88,7 @@ When a user matches multiple segments, the **primary segment** is the first matc
 8. VENDOR_ORG (b2b)
 9. UNKNOWN
 
-This ordering reflects Nikolai's stated geo-priority (Namibia > Kenya > SA) and mission (Bitcoin > sovereignty > builders > revenue).
+This ordering reflects the owner's stated geo-priority (Namibia > Kenya > SA) and mission (Bitcoin > sovereignty > builders > revenue).
 
 ---
 
@@ -111,7 +111,7 @@ influence_score(u) = (
 
 | Component | Weight | Why |
 |-----------|--------|-----|
-| `W_PR` — PageRank (normalized) | **0.20** | PageRank on the directed star measures who is followed by well-followed people within Nikolai's orbit. Works at 1-hop. |
+| `W_PR` — PageRank (normalized) | **0.20** | PageRank on the directed star measures who is followed by well-followed people within the owner's orbit. Works at 1-hop. |
 | `W_BC` — Betweenness centrality (normalized) | **0.15** | **DORMANT at 1-hop** (zero for all leaves). Reserved for post-2-hop enrichment. When activated, it identifies bridges between otherwise-disconnected communities — the highest-leverage nodes for network growth. |
 | `W_MUT` — Mutual status | **0.25** | The strongest available graph signal of active trust. A mutual is a two-way relationship; everything else is one-directional. Highest weight because trust is the substrate of both monetisation and community. |
 | `W_VER` — Verified | **0.10** | Cheap external credibility signal. Does not guarantee alignment but correlates with real-world identity and audience. |
@@ -125,8 +125,8 @@ Total: **1.00**
 #### pagerank_norm(u)
 ```python
 G = nx.DiGraph()
-# edge OKIN_17 -> u  if Nikolai follows u
-# edge u -> OKIN_17  if u follows Nikolai
+# edge OWNER -> u  if the owner follows u
+# edge u -> OWNER  if u follows the owner
 pagerank = nx.pagerank(G, alpha=0.85)
 pr_max = max(pagerank.values())
 pagerank_norm(u) = pagerank[u] / pr_max
@@ -139,7 +139,7 @@ betweenness = nx.betweenness_centrality(G_undirected, normalized=True)
 bc_max = max(betweenness.values()) if max(betweenness.values()) > 0 else 1.0
 betweenness_norm(u) = betweenness[u] / bc_max
 ```
-> **Note:** At 1-hop, `betweenness` is 0 for all non-OKIN_17 nodes. This weight is forward-looking. After 2-hop enrichment it becomes one of the most valuable components.
+> **Note:** At 1-hop, `betweenness` is 0 for all non-OWNER nodes. This weight is forward-looking. After 2-hop enrichment it becomes one of the most valuable components.
 
 #### bio_signal(u)
 ```python
@@ -206,7 +206,7 @@ def geo_score(bio: str) -> float:
 
 We lack the single most common influence signal (follower count). We compensate with:
 - **Mutual status** (0.25): a direct trust signal that does not require counts.
-- **PageRank** (0.20): structural importance within the extracted graph — still meaningful at 1-hop because it captures "who is followed by people Nikolai follows" and "who follows people who follow Nikolai" transitively.
+- **PageRank** (0.20): structural importance within the extracted graph — still meaningful at 1-hop because it captures "who is followed by people the owner follows" and "who follows people who follow the owner" transitively.
 - **Bio signal** (0.20): replaces interest/engagement data with declared-identity data.
 - **Geo** (0.10) + **Verified** (0.10): cheap tiebreakers.
 
@@ -224,35 +224,35 @@ Tiers are defined by the **asymmetry** of the connection. The asymmetries are wh
 |------|---------------|---------|--------|
 | **T1 — INNER CIRCLE** | `is_mutual == True` AND `influence_score >= P80` | Core collaborators. High-value two-way trust. | Co-create. Revenue-share. Invite to private channels. Ask what they need. Prioritize their needs over yours. |
 | **T2 — WARM** | `is_mutual == True` AND `influence_score < P80` | Active mutuals, not yet differentiated. | Nurture. Engage weekly. Convert to T1 by adding value first. Ask what they're building. |
-| **T3 — ASPIRATIONAL** | `is_following == True` AND `is_follower == False` | Nikolai follows them, they don't follow back. He has curated these; they signal who he admires or needs something from. | Audit: why does Nikolai follow them? If high-value, engage publicly to earn follow-back. If low-value, unfollow to reduce noise. These are growth targets. |
-| **T4 — POTENTIAL** | `is_follower == True` AND `is_following == False` | They follow Nikolai; he hasn't reciprocated. They chose him. | Evaluate. High-influence ones should be considered for reciprocation. These are the audience, customer base, and community pool. |
-| **T5 — VIP OUTREACH** (T4 sub-tier) | `is_follower == True` AND `is_following == False` AND `influence_score >= P90` | VIPs who chose Nikolai but he hasn't followed back. | Do NOT monetize aggressively. Follow back if alignment is genuine. First add value — they raised a hand. |
+| **T3 — ASPIRATIONAL** | `is_following == True` AND `is_follower == False` | the owner follows them, they don't follow back. He has curated these; they signal who he admires or needs something from. | Audit: why does the owner follow them? If high-value, engage publicly to earn follow-back. If low-value, unfollow to reduce noise. These are growth targets. |
+| **T4 — POTENTIAL** | `is_follower == True` AND `is_following == False` | They follow the owner; he hasn't reciprocated. They chose him. | Evaluate. High-influence ones should be considered for reciprocation. These are the audience, customer base, and community pool. |
+| **T5 — VIP OUTREACH** (T4 sub-tier) | `is_follower == True` AND `is_following == False` AND `influence_score >= P90` | VIPs who chose the owner but he hasn't followed back. | Do NOT monetize aggressively. Follow back if alignment is genuine. First add value — they raised a hand. |
 
 `P80` = 80th percentile of `influence_score` across all nodes. `P90` = 90th percentile.
 
 ### 3.2 What the asymmetries mean
 
 **He follows, they don't (T3):**
-- Nikolai has actively chosen these accounts. They represent aspiration, curiosity, or need.
+- the owner has actively chosen these accounts. They represent aspiration, curiosity, or need.
 - Value signal: if they're high-influence and Bitcoin/African aligned, they are worth earning a mutual with.
-- Danger signal: if they're low-influence, empty-bio, or shitcoin-aligned, they are noise Nikolai should prune.
+- Danger signal: if they're low-influence, empty-bio, or shitcoin-aligned, they are noise the owner should prune.
 
 **They follow, he doesn't (T4):**
-- These accounts chose Nikolai without reciprocation. They are the demand side.
+- These accounts chose the owner without reciprocation. They are the demand side.
 - Value signal: audience, customers, community members, potential revenue.
-- Sub-segment: T5 (VIP OUTREIGHT) are the highest-value demand — influential people who raised a hand. Nikolai should notice them.
+- Sub-segment: T5 (VIP OUTREIGHT) are the highest-value demand — influential people who raised a hand. the owner should notice them.
 
 ### 3.3 Tier transition goals
 - T3 -> T2: earn the follow-back through public engagement and value delivery.
 - T2 -> T1: deepen through direct collaboration and shared work.
 - T4 -> T5 -> T2: evaluate VIPs, reciprocate where genuine, convert to mutual through engagement.
-- T4 -> T3 is impossible (would mean Nikolai unfollowing and them following — no action path).
+- T4 -> T3 is impossible (would mean the owner unfollowing and them following — no action path).
 
 ---
 
 ## 4. OPPORTUNITY MAPS
 
-Two maps, honestly distinct. Monetisation is about revenue to Nikolai. Community is about collective benefit to the participants. The boundary between them is enforced.
+Two maps, honestly distinct. Monetisation is about revenue to the owner. Community is about collective benefit to the participants. The boundary between them is enforced.
 
 ### 4.1 MONETISATION MAP
 
@@ -262,19 +262,19 @@ Revenue mechanisms realistic for a Namibian freedom-tech builder. Geo-weighting 
 |-----------|----------------|------------|-----------------|---------------|
 | **HISHE licenses / sales** | BITCOINER, PRIVACY_SOVEREIGNTY, DEVELOPER | Global, Africa prioritized | Sovereign OS with Bitcoin stack | They already run Bitcoin nodes/wallets. HISHE is their daily driver. |
 | **HISHE enterprise / NGO licenses** | NGO_DEV_SECTOR, ENTREPRENEUR | Africa prioritized | Multi-seat deployment, training, support | NGOs need data-sovereignty. Grants cover tooling. |
-| **Consulting / advisory** | ENTREPRENEUR, NGO_DEV_SECTOR, VENDOR_ORG | Namibia > Kenya > SA | Security audits, self-custody setup, regulatory navigation | Nikolai's 9-agent team is a credible delivery engine. |
+| **Consulting / advisory** | ENTREPRENEUR, NGO_DEV_SECTOR, VENDOR_ORG | Namibia > Kenya > SA | Security audits, self-custody setup, regulatory navigation | a 9-agent team is a credible delivery engine. |
 | **Speaking / training** | MEDIA_PR, VENDOR_ORG, NGO_DEV_SECTOR | Global, Africa prioritized | Keynotes, workshops, HISHE bootcamps | Conferences pay. Meetups lead to consulting gigs. |
 | **Hardware wallet affiliate** | BITCOINER, VENDOR_ORG | Global | Trezor, SeedSigner, Sparrow, Liana referral fees | VENDOR_ORG segment handles are aligned. Affiliate revenue is low-friction. |
 | **B2B dev services** | DEVELOPER, ENTREPRENEUR | Namibia > Kenya > SA | Contract development for freedom-tech clients | Developers who are also entrepreneurs buy dev work. |
 | **Bitcoin circular-economy pilots** | BITCOINER + AFRICAN_TECH | Kenya, Namibia | Merchant onboarding, Lightning HISHE nodes | Afribit Kibera-style projects. Revenue via grants + training fees. |
 
-**Geo scoring is multiplicative:** a Namibian Bitcoiner-entrepreneur scores higher than a US one for monetisation because they're in Nikolai's priority zone and reachable for in-person work.
+**Geo scoring is multiplicative:** a Namibian Bitcoiner-entrepreneur scores higher than a US one for monetisation because they're in the owner's priority zone and reachable for in-person work.
 
 ### 4.2 COMMUNITY PROJECT MAP
 
-Collective initiatives that benefit the participants, not just Nikolai. Must be genuinely win-win-win.
+Collective initiatives that benefit the participants, not just the owner. Must be genuinely win-win-win.
 
-| Project | Target segments | Target geo | What participants get | What Nikolai gets |
+| Project | Target segments | Target geo | What participants get | What the owner gets |
 |---------|----------------|------------|----------------------|-------------------|
 | **HISHE local user groups** | BITCOINER, DEVELOPER, AFRICAN_TECH | Namibia, Kenya, SA | Peer support, local meetups, shared learning | Distribution channel, feedback loop, brand advocates |
 | **Bitcoin circular-economy pilots** | BITCOINER + AFRICAN_TECH | Kenya (Kibera), Namibia | Merchant income, financial inclusion, skills | Case studies, grant co-authorship, HISHE deployment data |
@@ -318,7 +318,7 @@ Each question is stated in plain English, followed by the graph metric that answ
 |---|----------|--------|------|
 | Q8 | Who bridges otherwise-disconnected communities in my extended network? | Betweenness centrality (undirected) | `nx.betweenness_centrality(G.to_undirected())` |
 | Q9 | What natural communities exist among my connections? | Louvain community detection / greedy modularity | `community_louvain.best_partition(G_undirected)` or `nx.community.greedy_modularity_communities` |
-| Q10 | Which communities am I adjacent to but not embedded in? | Community assignment of OKIN_17's neighbors vs OKIN_17's own community membership | compare community labels |
+| Q10 | Which communities am I adjacent to but not embedded in? | Community assignment of OWNER's neighbors vs OWNER's own community membership | compare community labels |
 | Q11 | Who are the gatekeepers of the Kenyan Bitcoin community? | Highest betweenness within the Kenyan-tagged subgraph | subgraph + betweenness |
 | Q12 | What is the shortest path between any two of my connections? | Shortest path length | `nx.shortest_path_length(G, u, v)` |
 | Q13 | Where are the structural holes I could fill? | Constraint / Burt's structural holes | `nx.constraint(G_undirected)` |
@@ -328,7 +328,7 @@ Each question is stated in plain English, followed by the graph metric that answ
 ### 5.3 Priority order for 2-hop extraction
 If extracting 2-hop data (followers of followers), do it in this order:
 1. **Mutuals first** (282 of them) — their followers are the highest-probability community members.
-2. **T5 VIP OUTREACH** — their followers reveal the communities Nikolai is adjacent to.
+2. **T5 VIP OUTREACH** — their followers reveal the communities the owner is adjacent to.
 3. **T3 ASPIRATIONAL** — their followers reveal aspirational communities.
 
 Cap at ~50-100 profiles per tier to stay within rate-limit safety. Use >=3s delay between profile visits.
@@ -371,20 +371,20 @@ with open('data/x_graph_v3.json') as f:
 
 # --- Build directed graph ---
 G = nx.DiGraph()
-main = data['username']  # "OKIN_17"
+main = data['username']  # "OWNER"
 G.add_node(main)
 
 for u in data['followers']:
     handle = u['handle']
     G.add_node(handle)
-    G.add_edge(handle, main)  # they follow Nikolai
+    G.add_edge(handle, main)  # they follow the owner
     if u.get('is_following', False):  # mutual
         G.add_edge(main, handle)
 
 for u in data['following']:
     handle = u['handle']
     G.add_node(handle)
-    G.add_edge(main, handle)  # Nikolai follows them
+    G.add_edge(main, handle)  # the owner follows them
     if u.get('is_follower', False):  # mutual (should already have edge)
         G.add_edge(handle, main)
 

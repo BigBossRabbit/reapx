@@ -92,7 +92,8 @@ def probe(page, user, path, label):
 
 
 def main():
-    user = sys.argv[1] if len(sys.argv) > 1 else "OKIN_17"
+    # The X handle to dump (pass one as the first argument).
+    user = sys.argv[1] if len(sys.argv) > 1 else "target-handle"
     browser = "brave"
     cookie_db = resolve_cookie_db(browser, "Default")
     if not cookie_db:

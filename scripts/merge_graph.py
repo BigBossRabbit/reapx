@@ -1,6 +1,13 @@
-import json, shutil
+#!/usr/bin/env python3
+"""merge_graph.py — merge the 1256-clean and v6 follower graphs (union on handle).
 
-BASE = '/Users/fromthejump/reapx/data/'
+Standalone one-off (X-graph lane). All paths are repo-relative.
+"""
+import json, shutil
+from pathlib import Path
+
+# Repo data dir (script lives in <repo>/scripts/).
+BASE = str(Path(__file__).resolve().parent.parent / 'data') + '/'
 shutil.copy(BASE + 'x_graph_clean.json', BASE + 'x_graph_clean.json.bak_1256')
 
 a = json.load(open(BASE + 'x_graph_v6.json'))            # 2346 followers (new, best)

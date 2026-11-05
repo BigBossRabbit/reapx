@@ -10,7 +10,8 @@ set -euo pipefail
 # so the pipeline uses /usr/local/bin/python3 (3.11 with required packages).
 export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/Library/Python/3.11/bin:$PATH"
 
-REPO="/Users/fromthejump/reapx"
+# Repo root (this script lives in <repo>/scripts/).
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE="$REPO/.last_sync_ts"
 LOG="$REPO/logs/reapx-$(date +%Y%m%d).log"
 NOW=$(date +%s)

@@ -10,13 +10,15 @@ Reuses the proven CDP + cookie machinery from fetch_x_graph.py. Read-only.
 """
 import argparse, json, os, random, shutil, sys, tempfile, time
 from datetime import datetime, timezone
+from pathlib import Path
 
-sys.path.insert(0, '/Users/fromthejump/reapx/scripts')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_x_graph import CDP, js, wait_for_cdp, new_page, wait_for_element
 from browser_locator import resolve_cookie_db
 from cdp_launcher import launch, find_free_port
 
-BASE = '/Users/fromthejump/reapx/data/'
+# Repo data dir (script lives in <repo>/scripts/).
+BASE = str(Path(__file__).resolve().parent.parent / 'data') + '/'
 OUT = BASE + 'x_2hop.json'
 
 EXTRACT_CELLS = r"""

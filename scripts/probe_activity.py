@@ -32,7 +32,7 @@ try:
 except ImportError:
     sys.exit("ERROR: 'websocket-client' required. Run: pip3 install websocket-client")
 
-sys.path.insert(0, '/Users/fromthejump/reapx/scripts')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_x_graph import CDP, js, wait_for_cdp, new_page, wait_for_element
 from browser_locator import resolve_cookie_db
 from cdp_launcher import launch, find_free_port, cleanup
@@ -49,8 +49,10 @@ MIN_PAGE_WAIT = 3
 # Default tier priority order (highest value first)
 TIER_ORDER = ['T5_VIP_OUTREACH', 'T1_INNER_CIRCLE', 'T2_WARM', 'T3_ASPIRATIONAL', 'T4_POTENTIAL']
 
-CRM_PATH = '/Users/fromthejump/reapx/data/x_crm_scored.json'
-DEFAULT_OUTPUT = '/Users/fromthejump/reapx/data/x_activity.json'
+# Repo data dir (script lives in <repo>/scripts/).
+_DATA = Path(__file__).resolve().parent.parent / 'data'
+CRM_PATH = str(_DATA / 'x_crm_scored.json')
+DEFAULT_OUTPUT = str(_DATA / 'x_activity.json')
 
 # ---------------------------------------------------------------------------
 # Profile extraction JS

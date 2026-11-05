@@ -35,7 +35,7 @@ try:
 except ImportError:
     sys.exit("ERROR: 'websocket-client' required. Run: pip3 install websocket-client")
 
-sys.path.insert(0, '/Users/fromthejump/reapx/scripts')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from browser_locator import resolve_cookie_db, get_installed_browsers
 from cdp_launcher import launch, find_free_port, cleanup
 

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Independent check: is X really throttling PROFILE pages?"""
 import sys, os, time, shutil, tempfile
-sys.path.insert(0, '/Users/fromthejump/reapx/scripts')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_x_graph import CDP, js, wait_for_cdp, new_page, wait_for_element
 from browser_locator import resolve_cookie_db
 from cdp_launcher import launch, find_free_port
 
-HANDLE = sys.argv[1] if len(sys.argv) > 1 else 'BitcoinFrndlySA'
+# The X handle to probe (pass one as the first argument).
+HANDLE = sys.argv[1] if len(sys.argv) > 1 else 'target-handle'
 
 os.system("pkill -f 'remote-debugging-port' 2>/dev/null")
 time.sleep(2)

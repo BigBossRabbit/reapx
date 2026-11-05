@@ -1,9 +1,10 @@
-# MISSION BRIEF — Doctor Doom — Fix the X follower/following extractor
+# MISSION BRIEF — Fix the X follower/following extractor
 
 GOAL
-Repair `/Users/fromthejump/reapx/scripts/fetch_x_graph.py` so it extracts CLEAN,
-CORRECT per-user data for the maximum number of @OKIN_17's followers and following
-that X will serve, then run it and produce a verified dataset on disk.
+Repair `<repo>/scripts/fetch_x_graph.py` so it extracts CLEAN,
+CORRECT per-user data for the maximum number of the target account's followers
+and following that X will serve, then run it and produce a verified dataset on
+disk.
 
 ## CONTEXT — pinned ground truth, do NOT re-derive or assume
 
@@ -13,7 +14,7 @@ PARSING is wrong. I dumped the live DOM with `scripts/dump_x_dom.py` and these a
 FACTS observed on the real page, not theories:
 
 1. HYDRATION TIMING (this is the biggest bug)
-   - At 10s after `Page.navigate` to `https://x.com/OKIN_17/followers`:
+   - At 10s after `Page.navigate` to `https://x.com/<target-handle>/followers`:
      `document.querySelectorAll('[data-testid="UserCell"]').length` === **0**
      and `document.body.innerHTML` still shows the `JavaScript is not available`
      noscript shell + Grok/chat drawers only.
@@ -79,8 +80,8 @@ FACTS observed on the real page, not theories:
 
 ## DELIVERABLE
 
-1. Fixed `/Users/fromthejump/reapx/scripts/fetch_x_graph.py`.
-2. A real run of it writing `/Users/fromthejump/reapx/data/x_graph_clean.json`,
+1. Fixed `<repo>/scripts/fetch_x_graph.py`.
+2. A real run of it writing `<repo>/data/x_graph_clean.json`,
    with a `meta` block containing: `extracted_at`, `followers_extracted`,
    `following_extracted`, `profile_followers_total` (4706 if detectable),
    `ceiling_note`, and `fields_unavailable: ["followers_count","following_count","location"]`.
