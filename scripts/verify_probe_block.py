@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Independent check: is X really throttling PROFILE pages?"""
+import sys, os, time, shutil, tempfile
+sys.path.insert(0, '/Users/fromthejump/reapx/scripts')
+from fetch_x_graph import CDP, js, wait_for_cdp, new_page, wait_for_element
+from browser_locator import resolve_cookie_db
+from cdp_launcher import launch, find_free_port
+
+HANDLE = sys.argv[1] if len(sys.argv) > 1 else 'BitcoinFrndlySA'
+
+os.system("pkill -f 'remote-debugging-port' 2>/dev/null")
+time.sleep(2)
+
+db = resolve_cookie_db('brave')
+tmp = tempfile.mkdtemp(prefix='reapx_verify_')
+dd = os.path.join(tmp, 'Default')
+os.makedirs(dd, exist_ok=True)
+shutil.copy2(db, os.path.join(dd, 'Cookies'))
+
+port = find_free_port()
+proc, _ = launch('brave', tmp, port)
+try:
+    version = wait_for_cdp(port)
+    browser = CDP(version['webSocketDebuggerUrl'])
+    page = new_page(browser, port)
+
+    page.send('Page.navigate', {'url': 'https://x.com/home'})
+    wait_for_element(page, '[data-testid="AppTabBar_Profile_Link"]', ceiling=30)
+    print('AUTH href:', js(page, 'location.href'))
+
+    page.send('Page.navigate', {'url': f'https://x.com/{HANDLE}'})
+    time.sleep(14)
+
+    print(js(page, """(() => {
+      const t = document.body.innerText || '';
+      const times = [...document.querySelectorAll('[data-testid="primaryColumn"] time')]
+                      .map(e => e.getAttribute('datetime'));
+      return JSON.stringify({
+        len: t.length,
+        wentWrong: t.includes('Something went wrong'),
+        notExist: t.includes('exist'),
+        suspended: t.includes('Account suspended'),
+        nTime: times.length,
+        firstTime: times[0] || null,
+        head: t.slice(0, 300)
+      }, null, 1);
+    })()"""))
+finally:
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    shutil.rmtree(tmp, ignore_errors=True)
