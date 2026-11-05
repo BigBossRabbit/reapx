@@ -27,3 +27,8 @@ generated_skills/
 data/
 logs/
 generated_skills/
+# R17: OS + editor junk never ships
+.DS_Store
+._*
+# the plugin-mode local probe/engine caches
+*.egg-info/

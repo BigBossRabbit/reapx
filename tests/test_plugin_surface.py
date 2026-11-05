@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""test_plugin_surface.py — the register() contract, rehearsed exactly the
+way ``hermes plugins validate`` runs it (the recording-stub probe) plus the
+engine-adapter mechanics. Hermes-free (a hermes import inside register()'s
+optional steps degrades gracefully — same as under the validate probe).
+
+Guards (each maps to a gate that would otherwise only fail at admission):
+  * register() runs against a recording stub WITHOUT raising, registers the
+    4 declared tools (R06) and nothing else;
+  * register() never touches the property surface the recording stub cannot
+    provide (ctx.llm / ctx.state / ctx.manifest) — the validate probe's
+    stub raises AttributeError for those, so touching one fails admission;
+  * every tool schema is a dict with a dict ``parameters`` (registry.register
+    raises at load time otherwise) and declares its name;
+  * tools.py handlers NEVER raise (the never-raise contract) and always
+    return a JSON string;
+  * the mode guards: reapx_harvest refuses in export mode, reapx_import
+    refuses in browser mode (clean error JSON, exit-path safe);
+  * _engine namespace adapter: load() imports the shared engine under the
+    plugin's own namespace (never top-level), a missing engine import
+    becomes a RuntimeError (never a bare ImportError), and evict() pops the
+    reapx-exclusive top-level names;
+  * register_skill with a non-existent path is a guarded error (the bundled
+    skill loop never kills the load).
+"""
+import importlib.util
+import json
+import sys
+import types
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+PLUGIN_PKG = "reapx_under_test"
+
+
+def _load_plugin(pkg=PLUGIN_PKG):
+    """Import the plugin the way the loader does (spec + package path)."""
+    if pkg in sys.modules:
+        return sys.modules[pkg]
+    spec = importlib.util.spec_from_file_location(
+        pkg, REPO_ROOT / "__init__.py",
+        submodule_search_locations=[str(REPO_ROOT)])
+    module = importlib.util.module_from_spec(spec)
+    module.__path__ = [str(REPO_ROOT)]
+    sys.modules[pkg] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class RecordingContext:
+    """A faithful copy of the validate probe's recording stub (the class the
+    admission check runs register() against): real attributes for the
+    surface the stub provides, a hard AttributeError for the property
+    surface the real PluginContext provides only as instance/state
+    attributes (ctx.llm, ctx.state, ctx.manifest) — touching one from
+    register() fails validation, so this stub enforces the same rule."""
+
+    plugin_config = {}
+    profile_name = "default"
+    plugin_id = "reapx_under_test"
+
+    def __init__(self):
+        self.recorded = {"tools": [], "hooks": [], "middleware": [],
+                         "commands": [], "providers": [], "skills": [],
+                         "blueprints": [], "aux_tasks": [], "on_unload": []}
+        self.raised = []
+
+    def register_tool(self, name, *args, **kwargs):
+        self.recorded["tools"].append(str(name))
+
+    def register_hook(self, hook_name, callback, **kwargs):
+        self.recorded["hooks"].append(str(hook_name))
+
+    def register_middleware(self, kind, callback):
+        self.recorded["middleware"].append(str(kind))
+
+    def register_command(self, name, *args, **kwargs):
+        self.recorded["commands"].append(str(name))
+
+    def get_config(self, key, default=None):
+        return default
+
+    def register_auxiliary_task(self, key, **kwargs):
+        self.recorded["aux_tasks"].append(str(key))
+
+    def register_skill(self, name, path, *args, **kwargs):
+        # the REAL one requires an existing path; the stub records
+        import pathlib
+        if not pathlib.Path(path).exists():
+            raise FileNotFoundError(f"SKILL.md not found at {path}")
+        self.recorded["skills"].append(str(name))
+
+    def register_automation_blueprint(self, key, **kwargs):
+        self.recorded["blueprints"].append(str(key))
+
+    def on_unload(self, callback):
+        self.recorded["on_unload"].append(callback)
+
+    def __getattr__(self, name):
+        # exactly the probe's rule: names that are NOT real PluginContext
+        # methods raise; everything real (register_*) we provide above.
+        self.raised.append(name)
+        raise AttributeError(name)
+
+
+class RegisterContractTests(unittest.TestCase):
+    """register() under the recording stub == the validate probe run."""
+
+    def setUp(self):
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+        self.plugin = _load_plugin()
+        self.ctx = RecordingContext()
+
+    def tearDown(self):
+        # the engine adapter may have registered an on_unload evictor — run
+        # the callbacks + drop our package copy
+        try:
+            self.plugin.runtime.run_unload()
+        except Exception:
+            pass
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+
+    def test_register_records_exactly_the_four_tools(self):
+        self.plugin.register(self.ctx)
+        self.assertEqual(sorted(self.ctx.recorded["tools"]),
+                         sorted(["reapx_harvest", "reapx_import",
+                                 "reapx_status", "reapx_review"]))
+
+    def test_register_never_touches_the_stub_forbidden_surface(self):
+        self.plugin.register(self.ctx)
+        # __getattr__ was never needed => register() only used the real
+        # recording surface (get_config / register_*). ctx.llm / ctx.state /
+        # ctx.manifest would have landed in `raised`.
+        self.assertEqual(self.ctx.raised, [])
+
+    def test_register_aux_task_underscore_key(self):
+        self.plugin.register(self.ctx)
+        self.assertEqual(self.ctx.recorded["aux_tasks"],
+                         ["reapx_enricher"])
+        # A hyphen in the key raises ValueError in the REAL registrar and
+        # fails the whole load (mission-C probe discovery): assert the key
+        # is alnum+underscore only.
+        self.assertRegex("reapx_enricher", r"^[A-Za-z0-9_]+$")
+
+    def test_register_bundled_index_skill(self):
+        self.plugin.register(self.ctx)
+        self.assertIn("reapx-index", self.ctx.recorded["skills"])
+
+    def test_register_blueprint(self):
+        self.plugin.register(self.ctx)
+        self.assertEqual(self.ctx.recorded["blueprints"], ["harvest"])
+
+    def test_register_on_unload(self):
+        self.plugin.register(self.ctx)
+        self.assertEqual(len(self.ctx.recorded["on_unload"]), 1)
+
+    def test_register_with_a_broken_optional_step_degrades(self):
+        """A failing aux task (the recording stub raising, say) must never
+        kill the load: register() still records the 4 tools."""
+        ctx = RecordingContext()
+
+        def boom(*a, **k):
+            raise ValueError("aux task key already taken")
+
+        ctx.register_auxiliary_task = boom
+        self.plugin.register(ctx)
+        self.assertEqual(len(ctx.recorded["tools"]), 4)
+
+    def test_schemas_are_well_formed(self):
+        from reapx_under_test import schemas  # the package copy
+        for name, schema in schemas.ALL.items():
+            self.assertIsInstance(schema, dict, name)
+            self.assertEqual(schema["name"], name)
+            params = schema.get("parameters")
+            self.assertIsInstance(params, dict, name)
+            self.assertIn("type", params)
+            self.assertIn("description", schema)
+
+
+class NeverRaiseContractTests(unittest.TestCase):
+    """tools.py: a JSON string always, a raise never (A.3.6)."""
+
+    def setUp(self):
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+        self.plugin = _load_plugin()
+        self.plugin.runtime.set_ctx(RecordingContext())
+
+    def tearDown(self):
+        try:
+            self.plugin.runtime.run_unload()
+        except Exception:
+            pass
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+
+    def _json(self, raw):
+        parsed = json.loads(raw)
+        self.assertIsInstance(raw, str)
+        return parsed
+
+    def test_harvest_guards_export_mode(self):
+        from reapx_under_test import tools
+        ctx = RecordingContext()
+        ctx.get_config = lambda key, default=None: (
+            "export" if key == "harvest_mode" else default)
+        self.plugin.runtime.set_ctx(ctx)
+        out = self._json(tools.harvest({}))
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "harvest_disabled_in_export_mode")
+
+    def test_import_guards_browser_mode(self):
+        from reapx_under_test import tools
+        out = self._json(tools.import_({}))  # default = browser mode
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "import_disabled_in_browser_mode")
+
+    def test_status_never_raises_without_hermes(self):
+        from reapx_under_test import tools
+        out = self._json(tools.status({}))
+        self.assertTrue(out["ok"])
+
+    def test_review_never_raises_without_hermes(self):
+        from reapx_under_test import tools
+        out = self._json(tools.review({}))
+        self.assertTrue(out["ok"])
+
+    def test_handlers_accept_var_kwargs(self):
+        import inspect
+        from reapx_under_test import tools
+        for name in ("harvest", "import_", "status", "review"):
+            sig = inspect.signature(getattr(tools, name))
+            self.assertTrue(any(p.kind is inspect.Parameter.VAR_KEYWORD
+                                for p in sig.parameters.values()), name)
+
+    def test_harvest_with_a_raising_worker_returns_error_json(self):
+        from reapx_under_test import tools
+        plugin = self.plugin
+
+        class Boom:
+            def run_harvest(self, args):
+                raise RuntimeError("engine exploded")
+
+        import reapx_under_test.harvest as h
+        orig = h.run_harvest
+        h.run_harvest = Boom().run_harvest
+        try:
+            out = self._json(tools.harvest({"dry_run": True}))
+        finally:
+            h.run_harvest = orig
+        self.assertFalse(out["ok"])
+        self.assertIn("RuntimeError", out["error"])
+
+
+class EngineAdapterTests(unittest.TestCase):
+    """_engine: the namespace import + the never-bare-ImportError rule."""
+
+    def setUp(self):
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+        self.plugin = _load_plugin()
+
+    def tearDown(self):
+        try:
+            self.plugin.runtime.run_unload()
+        except Exception:
+            pass
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+
+    def test_load_imports_shared_engine_under_the_namespace(self):
+        from reapx_under_test import _engine
+        _engine.load()
+        # shared engine: under the plugin's namespace …
+        self.assertIn(PLUGIN_PKG + ".scripts.ledger", sys.modules)
+        self.assertIn(PLUGIN_PKG + ".scripts.categorize_repos", sys.modules)
+        self.assertIn(PLUGIN_PKG + ".scripts.generate_skills", sys.modules)
+        # … and NOT top-level (two plugins never fight over the shared
+        # engine names — reapx's vs starlearner's generate_skills differ).
+        self.assertNotIn("ledger", sys.modules)
+        self.assertNotIn("categorize_repos", sys.modules)
+        self.assertNotIn("generate_skills", sys.modules)
+
+    def test_load_never_imports_the_fetch_chain(self):
+        from reapx_under_test import _engine
+        _engine.load()
+        self.assertFalse(_engine._FETCH_LOADED)
+        self.assertNotIn(PLUGIN_PKG + ".scripts.fetch_x_bookmarks",
+                         sys.modules)
+        self.assertNotIn("browser_locator", sys.modules)
+
+    def test_broken_engine_import_is_a_runtimeerror(self):
+        from reapx_under_test import _engine
+
+        real = _engine._boot_path
+
+        def broken():
+            raise ImportError("no such module")
+
+        _engine._boot_path = broken
+        _engine._LOADED = False
+        try:
+            with self.assertRaises(RuntimeError):
+                _engine.load()
+        finally:
+            _engine._boot_path = real
+            _engine._LOADED = False
+
+    def test_evict_pops_the_reapx_exclusive_top_levels(self):
+        from reapx_under_test import _engine
+        for name in _engine.ENGINE_TOP_LEVEL:
+            sys.modules[name] = types.ModuleType(name)
+        _engine.evict()
+        for name in _engine.ENGINE_TOP_LEVEL:
+            self.assertNotIn(name, sys.modules)
+
+    def test_register_skill_bad_path_is_guarded(self):
+        """The bundled-skill loop: a non-existent SKILL.md (the real
+        register_skill raises FileNotFoundError) is a logged error, never a
+        dead plugin."""
+        ctx = RecordingContext()
+        real_reg = ctx.register_skill
+
+        def raising_reg(name, path, *a, **k):
+            if name == "reapx-index":
+                raise FileNotFoundError(f"SKILL.md not found at {path}")
+            return real_reg(name, path, *a, **k)
+
+        ctx.register_skill = raising_reg
+        self.plugin.register(ctx)  # must NOT raise
+        self.assertEqual(len(ctx.recorded["tools"]), 4)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

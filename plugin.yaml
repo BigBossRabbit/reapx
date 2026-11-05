@@ -1,0 +1,121 @@
+# plugin.yaml — ReapX (manifest v2)
+name: reapx
+version: 1.0.0                 # matches the pinned code + the catalog entry's quoted version
+manifest_version: 2
+api_version: 1
+license: MIT
+author: BigBossRabbit
+homepage: https://github.com/BigBossRabbit/reapx
+tags: [skills, x, bookmarks, harvest, browser, cdp, automation]
+
+description: >-
+  Harvest your X bookmarks from your own logged-in browser (no paid X API) and
+  turn the ones that matter into ready-to-load Hermes skills. Incremental via a
+  persistent seen-ledger, two-track assessed (integrate-into-makeup +
+  business-opportunity), with optional LLM enrichment of the map / categorize /
+  assess stages through the host (ctx.llm) — zero keys, zero credentials in the
+  plugin. Falls back to the deterministic rules engine when no LLM is used.
+  Optional export mode works from a bookmarks file with zero browser reads.
+
+# R06: must list EXACTLY what register() registers (hermes plugins validate
+# fails the entry otherwise; "N tools" chips come from here).
+provides_tools:
+  - reapx_harvest
+  - reapx_import
+  - reapx_status
+  - reapx_review
+
+provides_hooks: []             # v1 registers no hooks
+
+# R14: honest SemVer floor — the oldest hermes-agent this was validated
+# against (plugin_llm ctx.llm incl. register_auxiliary_task, manifest v2,
+# config_schema settings forms, register_skill namespacing). Same value goes
+# in the catalog entry plugin-catalog/reapx.yaml.
+requires_hermes: ">=0.22.6"
+
+# R11: ReapX needs NO credentials at all. No requires_env. The browser session
+# is the user's own (harvest mode, see the README's R13 disclosures); export
+# mode needs nothing. The LLM runs host-owned via ctx.llm. This field is
+# intentionally absent.
+
+# R10: floors + upper bounds; the engine-path subset. NOTE vs
+# requirements.txt (the STANDALONE list): PyYAML and requests are unused by
+# the engine path; cryptography and pywin32 are verify-path-only (standalone;
+# guarded imports) — NOT declared here. The plugin harvest path needs
+# jinja2 (generate_skills) + websocket-client (the CDP client).
+python_dependencies:
+  - "jinja2>=3.0,<4"           # templating (generate_skills)
+  - "websocket-client>=1.6,<2" # the CDP client (fetch_x_bookmarks)
+
+# Every setting incl. the harvest-mode + export-mode ones. All land in
+# plugins.entries.reapx.settings.* and render as the Desktop Settings form.
+config_schema:
+  harvest_mode:
+    type: str
+    choices: [browser, export]
+    default: browser
+    label: Harvest mode
+    description: >-
+      browser = read your bookmarks from your own logged-in Chromium-family
+      browser (the live Cookies SQLite is copied read-only into a temporary
+      profile and a headless browser reads them exactly like the real one; no
+      X API, nothing decrypted, nothing logged). export = process a bookmarks
+      file you provide instead (zero browser reads).
+  browser:
+    type: str
+    choices: [auto, brave, chrome, edge, arc, opera]
+    default: auto
+    label: Browser
+    description: Which installed Chromium-family browser carries your X login.
+  browser_profile:
+    type: str
+    default: "Default"
+    label: Browser profile
+    description: Profile directory name inside the chosen browser.
+  max_scrolls:
+    type: int
+    default: 500
+    label: Max scrolls
+    description: >-
+      Hard cap on the infinite-load scroll loop per harvest (1.8 s apart).
+      500 covers a full bookmark history; lower it (e.g. 60) for quick runs.
+  import_dir:
+    type: str
+    default: ""
+    label: Import directory
+    description: >-
+      (export mode) Default directory reapx_import reads bookmark files from.
+      Empty = no default; the tool arg is required.
+  enrich:
+    type: str
+    choices: [llm, rules]
+    default: llm
+    label: Enrichment engine
+    description: >-
+      llm = the map / categorize / assess stages run through the host LLM
+      (ctx.llm — your active provider and model, host-owned credentials, no
+      keys in this plugin) with the rules engine as fallback; rules = the
+      deterministic keyword engine only (zero LLM calls).
+  llm_max_items:
+    type: int
+    default: 50
+    label: LLM items per run
+    description: >-
+      Per-run cap on items sent for LLM enrichment (a token-spend guard).
+      Items beyond the cap — and everything whenever the LLM call fails —
+      fall back to the rules engine. 0 disables LLM enrichment entirely.
+  generate_limit:
+    type: int
+    default: 5
+    label: Skills per category per run
+    description: >-
+      Max skills generated per category per run (top by score; the engine
+      hardcodes 5). Set 0 to assess-only without generating skills.
+  register_generated_skills:
+    type: bool
+    default: true
+    label: Register generated skills
+    description: >-
+      Register generated skills with the agent (namespaced reapx:<name>,
+      loaded with skill_view). If false, files are still written + reviewed
+      via reapx_review but not registered.
