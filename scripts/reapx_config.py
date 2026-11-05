@@ -19,7 +19,12 @@ from pathlib import Path
 
 from browser_locator import get_installed_browsers
 
-DEFAULT_OUTPUT = Path("data/x_bookmarks.json")
+# The data-dir seam (reapx_paths): the default output resolves through it —
+# `<repo>/data/x_bookmarks.json` standalone (unchanged), or the data dir the
+# plugin layer / REAPX_DATA_DIR selects. An explicit --output always wins.
+from reapx_paths import resolve_data_dir
+
+DEFAULT_OUTPUT = resolve_data_dir() / "x_bookmarks.json"
 
 
 def _env(name, default):

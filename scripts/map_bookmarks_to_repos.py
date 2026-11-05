@@ -12,17 +12,19 @@ Schema mapping (per bookmark/tweet):
   owner            <- {login: <author>}
   stargazers_count <- 0
 
-Reads data/x_bookmarks.json, writes data/starred_repos.json-compatible output.
+Reads <data-dir>/x_bookmarks.json (default: the repo's data/; see
+reapx_paths.py — the plugin layer maps into its plugin-data dir), writes
+<data-dir>/starred_repos.json-compatible output.
 """
+import argparse
 import json
 import re
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR.parent / "data"
-INPUT_FILE = DATA_DIR / "x_bookmarks.json"
-OUTPUT_FILE = DATA_DIR / "starred_repos.json"
+# The data-dir seam (reapx_paths). Flat sibling import, standalone-style.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from reapx_paths import resolve_data_dir, add_data_dir_arg
 
 HASHTAG_RE = re.compile(r"#([A-Za-z0-9_]+)")
 MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
@@ -79,17 +81,28 @@ def map_bookmark(b):
     }
 
 
-def main():
-    if not INPUT_FILE.exists():
-        sys.exit(f"ERROR: {INPUT_FILE} not found. Run fetch_x_bookmarks.py first.")
-    with open(INPUT_FILE) as f:
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="map_bookmarks_to_repos",
+        description="Map x_bookmarks.json into the starred_repos.json schema.")
+    add_data_dir_arg(parser)
+    args = parser.parse_args(argv)
+
+    # The data-dir seam: <data-dir>/x_bookmarks.json -> <data-dir>/starred_repos.json
+    # (default: the repo's data/ — the pre-plugin behaviour, unchanged).
+    input_file = resolve_data_dir(args.data_dir) / "x_bookmarks.json"
+    output_file = resolve_data_dir(args.data_dir) / "starred_repos.json"
+
+    if not input_file.exists():
+        sys.exit(f"ERROR: {input_file} not found. Run fetch_x_bookmarks.py first.")
+    with open(input_file) as f:
         bookmarks = json.load(f)
 
     repos = [map_bookmark(b) for b in bookmarks]
-    with open(OUTPUT_FILE, "w") as f:
+    with open(output_file, "w") as f:
         json.dump(repos, f, indent=2, ensure_ascii=False)
 
-    print(f"[map_bookmarks_to_repos] Mapped {len(repos)} bookmarks -> {OUTPUT_FILE}")
+    print(f"[map_bookmarks_to_repos] Mapped {len(repos)} bookmarks -> {output_file}")
     print(f"[map_bookmarks_to_repos] (target schema: starred_repos.json, "
           f"{len(repos)} items, stargazers_count=0)")
 

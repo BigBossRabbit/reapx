@@ -1,0 +1,30 @@
+[
+  {
+    "id": "1000000000000000001",
+    "author": "sample_alice",
+    "text": "Introducing SampleGPT — a tiny local model runner with a clean cli and an http api for tool calling #localai #llm @sample_dev",
+    "created_at": "2026-11-01T09:00:00Z",
+    "urls": ["https://github.com/sample-org/sample-gpt"]
+  },
+  {
+    "id": "1000000000000000002",
+    "author": "sample_bob",
+    "text": "Great thread on lightning network channel management with lnd — routing, fees and a nice dashboard for node operators #bitcoin #lightning",
+    "created_at": "2026-11-02T10:00:00Z",
+    "urls": []
+  },
+  {
+    "id": "1000000000000000003",
+    "author": "sample_carol",
+    "text": "Just a pleasant photo of a mountain trail. No tools here.",
+    "created_at": "2026-11-03T11:00:00Z",
+    "urls": []
+  },
+  {
+    "id": "1000000000000000004",
+    "author": "sample_dan",
+    "text": "Interesting scraper library for privacy research — crawling, parsing, scheduler included, works offline",
+    "created_at": "2026-11-04T12:00:00Z",
+    "urls": ["https://github.com/sample-org/sample-scraper"]
+  }
+]
