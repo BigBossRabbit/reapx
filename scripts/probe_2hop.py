@@ -142,7 +142,14 @@ def main():
         print('[2hop] nothing to do')
         return
 
-    os.system("pkill -f 'remote-debugging-port' 2>/dev/null")
+    # Kill stale CDP browsers (best-effort, argv-list form: no shell).
+    try:
+        import subprocess
+        subprocess.run(["pkill", "-f", "remote-debugging-port"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=False)
+    except Exception:
+        pass
     time.sleep(2)
 
     db = resolve_cookie_db(args.browser)

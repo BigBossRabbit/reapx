@@ -382,9 +382,15 @@ def main():
         print("[probe] Nothing to probe.")
         return
 
-    # --- Kill stale CDP browsers ---
+    # --- Kill stale CDP browsers (best-effort, argv-list: no shell) ---
     print("[probe] Killing stale CDP browsers...")
-    os.system("pkill -f 'remote-debugging-port' 2>/dev/null")
+    try:
+        import subprocess
+        subprocess.run(["pkill", "-f", "remote-debugging-port"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=False)
+    except Exception:
+        pass
     time.sleep(1)
 
     # --- Launch browser with cookies ---
