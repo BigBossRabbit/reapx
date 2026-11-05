@@ -33,6 +33,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+# The hermes checkout (the R09 no-shadow probe puts it on the subprocess
+# path so the engine load happens with hermes core's top-level packages
+# importable — the exact runtime shape).
+HERMES_CHECKOUT = Path("/Users/fromthejump/.hermes/profiles/thanos/"
+                       "hermes-agent")
+
 PLUGIN_PKG = "reapx_under_test"
 
 
@@ -324,6 +330,68 @@ class EngineAdapterTests(unittest.TestCase):
         _engine.evict()
         for name in _engine.ENGINE_TOP_LEVEL:
             self.assertNotIn(name, sys.modules)
+
+    def test_engine_load_restores_sys_path(self):
+        """THE R09 no-shadow proof (a fresh subprocess): the engine
+        scripts carry their own standalone-era
+        ``sys.path.insert(0, <repo root>)`` idiom — under the plugin that
+        would leave THE PLUGIN ROOT on sys.path, and every plugin root
+        has a top-level ``tools.py`` that would then shadow hermes
+        core's ``tools`` package (imported lazily all over core) for
+        every later import. _engine restores the path after every load;
+        the engine itself keeps working (its modules land in sys.modules
+        under the plugin's namespace)."""
+        import json
+        import os
+        import subprocess
+        import textwrap
+
+        code = textwrap.dedent('''
+            import importlib.util, sys, json
+            from pathlib import Path
+            REPO = Path(%r)
+            if str(REPO) in sys.path:
+                sys.path.remove(str(REPO))
+            HERMES = %r
+            if HERMES and str(HERMES) not in sys.path:
+                sys.path.insert(0, str(HERMES))
+            spec = importlib.util.spec_from_file_location(
+                "engine_pkg", REPO / "__init__.py",
+                submodule_search_locations=[str(REPO)])
+            pkg = importlib.util.module_from_spec(spec)
+            pkg.__path__ = [str(REPO)]
+            sys.modules["engine_pkg"] = pkg
+            spec.loader.exec_module(pkg)  # the import surface only
+            from engine_pkg import _engine
+            before = list(sys.path)
+            _engine.load()
+            out = {"restored": sys.path == before,
+                   "root_anywhere": str(REPO) in sys.path,
+                   "engine_loaded": _engine._LOADED,
+                   "ledger_ns": "engine_pkg.scripts.ledger" in sys.modules}
+            try:
+                import tools
+                out["tools_file"] = getattr(tools, "__file__", "") or ""
+            except Exception as exc:
+                out["tools_file"] = "IMPORT-ERROR " + type(exc).__name__
+            print("R09PROBE " + json.dumps(out))
+        ''') % (str(REPO_ROOT),
+                str(HERMES_CHECKOUT) if HERMES_CHECKOUT.is_dir() else None)
+        env = dict(os.environ)
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True,
+            text=True, timeout=120, env=env, cwd=str(REPO_ROOT / "tests"))
+        line = [l for l in proc.stdout.splitlines()
+                if l.startswith("R09PROBE ")]
+        self.assertTrue(line, "probe output missing: %r / %r"
+                        % (proc.stdout[-300:], proc.stderr[-300:]))
+        out = json.loads(line[0].split(" ", 1)[1])
+        self.assertTrue(out["engine_loaded"])  # the engine really loaded
+        self.assertTrue(out["ledger_ns"])  # under the namespace
+        self.assertTrue(out["restored"])   # sys.path bit-for-bit restored
+        self.assertFalse(out["root_anywhere"])  # no root left behind
+        # a top-level 'tools' never resolves to the plugin's tools.py:
+        self.assertNotIn(str(REPO_ROOT), out["tools_file"])
 
     def test_register_skill_bad_path_is_guarded(self):
         """The bundled-skill loop: a non-existent SKILL.md (the real

@@ -52,11 +52,24 @@ def load() -> None:
     """Import the shared engine (map / categorize / assess / generate /
     ledger — none of it needs a browser or websocket-client, so the EXPORT
     mode path works on any hermes). Idempotent; raises RuntimeError (never a
-    bare ImportError) when the engine cannot load."""
+    bare ImportError) when the engine cannot load.
+
+    R09 discipline — the path-restore: the engine scripts carry their own
+    standalone-era ``sys.path.insert(0, <repo root>)`` idiom
+    (categorize/generate: "add the skill directory to path for imports" —
+    a no-op for the imports they actually do). Under the plugin it would
+    leave THE PLUGIN ROOT at ``sys.path[0]``, and every plugin root carries
+    a top-level ``tools.py``/``scripts`` package — shadowing hermes core's
+    own top-level ``tools``/``scripts`` packages for every later LAZY core
+    import (core imports ``tools.*`` lazily all over: approval contexts,
+    mcp costs, …). Everything the engine needs from the path it imports at
+    import time (the fetch chain's flat siblings land in sys.modules), so
+    the path is restored to exactly what it was after every load."""
     global _LOADED, ledger, categorize_repos, assess_repos, generate_skills
     global map_bookmarks_to_repos
     if _LOADED:
         return
+    saved_path = list(sys.path)
     try:
         _boot_path()
         # Package-relative: hermes_plugins.reapx.scripts.<name> — the plugin's
@@ -70,6 +83,8 @@ def load() -> None:
     except Exception as exc:
         raise RuntimeError(f"engine load failed: {type(exc).__name__}: "
                            f"{exc}") from exc
+    finally:
+        sys.path[:] = saved_path
     _register_eviction()
     _LOADED = True
 
@@ -80,11 +95,18 @@ def load_fetch() -> None:
     ``websocket-client`` import (a sys.exit at import time) is converted
     into a clean RuntimeError for the harvest error model (R12) — the
     export path never calls this, so a missing websocket can only ever
-    produce reapx_harvest's ``dependency_missing`` error."""
+    produce reapx_harvest's ``dependency_missing`` error.
+
+    Same path-restore as load(): the fetcher (and its config + paths
+    siblings) carry their own ``sys.path.insert(0, <scripts dir>)``
+    flat-import idiom — the siblings land in sys.modules (their refs are
+    held), and the path goes back to what it was (never shadowing core's
+    top-level names)."""
     global _FETCH_LOADED, fetch_x_bookmarks
     if _FETCH_LOADED:
         return
     load()
+    saved_path = list(sys.path)
     try:
         from .scripts import fetch_x_bookmarks  # type: ignore # noqa: F401
     except SystemExit as exc:  # the engine's guarded websocket import
@@ -92,6 +114,8 @@ def load_fetch() -> None:
                                        "(websocket-client)") from exc
     except ImportError as exc:
         raise RuntimeError(f"engine import failed: {exc}") from exc
+    finally:
+        sys.path[:] = saved_path
     _FETCH_LOADED = True
 
 
