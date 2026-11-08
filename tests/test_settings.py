@@ -2,32 +2,29 @@
 """test_settings.py — the settings law (the skill's step-6 gate).
 
 Every setting lives under ``plugins.entries.reapx.settings.*`` (rendered
-as the Desktop Settings form from ``plugin.yaml``'s config_schema), read
-through ``runtime.setting`` with the precedence **tool args > settings >
-default**, and the defaults are GENERIC (a settings field with a
-hardcoded personal default is still a hardcode) and IDENTICAL to the
-defaults the code actually uses (plugin.yaml == the code — R06's spirit
-applied to settings):
+as the Desktop Settings form from ``plugin.yaml``'s config_schema) and is
+read through ``runtime.setting`` from the PLUGIN CONFIG ONLY. The defaults
+are GENERIC (a settings field with a hardcoded personal default is still a
+hardcode) and IDENTICAL to the defaults the code actually uses
+(plugin.yaml == the code — R06's spirit applied to settings):
 
-  * precedence: args override settings; settings override the default;
-    a missing context (no register()) = the default; a raising/None
+  * config-only: a tool arg with the same name does NOT override a setting
+    (a prompt-injected call cannot flip enrich, lift llm_max_items, force
+    registration or switch import_dir);
+  * a missing context (no register()) = the default; a raising/None
     ``get_config`` = the default (a settings read never crashes);
-  * config_schema: the 10 keys, types + choices valid, every key carries
-    a label + description (the Settings form), and every default is a
-    generic value (no personal paths/names/numbers);
-  * code defaults == the schema defaults (harvest_mode=browser,
-    browser=auto, browser_profile=Default, max_scrolls=500, import_dir="",
-    enrich=llm, llm_max_items=50, generate_limit=5,
-    register_generated_skills=true);
-  * the mode guards read harvest_mode through the same precedence
-    (args > settings): reapx_harvest refuses in export mode,
-    reapx_import in browser mode, and args can override the settings
-    mode for one call;
+  * config_schema: exactly the 5 keys, types + choices valid, every key
+    carries a label + description (the Settings form), every default
+    generic (no personal paths/names/numbers);
+  * code defaults == the schema defaults (import_dir="", enrich=llm,
+    llm_max_items=50, generate_limit=5, register_generated_skills=false);
   * llm_max_items=0 disables LLM enrichment (the cap's documented
-    meaning) — zero ctx.llm calls.
+    meaning) — zero ctx.llm calls — and 0 survives a real settings read
+    (it is not swallowed by an ``or`` fallback);
+  * ``runtime.bounded_arg`` is the ONE per-call knob: it may only LOWER
+    the configured cap, never raise it, and junk/absent/negative = the cap.
 """
 import importlib.util
-import json
 import sys
 import tempfile
 import unittest
@@ -76,7 +73,7 @@ class StubCtx:
         return self._settings.get(key, default)
 
 
-class SettingPrecedenceTests(unittest.TestCase):
+class SettingLawTests(unittest.TestCase):
 
     def setUp(self):
         for name in list(sys.modules):
@@ -91,12 +88,24 @@ class SettingPrecedenceTests(unittest.TestCase):
             if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
                 sys.modules.pop(name, None)
 
-    def test_args_beat_settings_beat_default(self):
-        self.runtime.set_ctx(StubCtx({"enrich": "rules"}))
+    def test_settings_come_from_config_only(self):
+        """The old precedence (args > settings) is gone: an arg with the
+        same name is IGNORED — only config counts."""
+        self.runtime.set_ctx(StubCtx({"enrich": "rules",
+                                      "llm_max_items": 3,
+                                      "register_generated_skills": True}))
+        hostile = {"enrich": "llm", "llm_max_items": 999,
+                   "register_generated_skills": False,
+                   "import_dir": "/tmp/pwned",
+                   "harvest_mode": "browser"}
         self.assertEqual(self.runtime.setting("enrich", "llm"), "rules")
-        self.assertEqual(
-            self.runtime.setting("enrich", "llm",
-                                 {"enrich": "llm"}), "llm")
+        self.assertEqual(self.runtime.setting("llm_max_items", 50), 3)
+        self.assertIs(self.runtime.setting("register_generated_skills",
+                                           False), True)
+        # the legacy third positional is gone from the signature too
+        import inspect
+        params = list(inspect.signature(self.runtime.setting).parameters)
+        self.assertEqual(params, ["key", "default"])
 
     def test_no_context_is_the_default(self):
         self.runtime.set_ctx(None)
@@ -104,7 +113,7 @@ class SettingPrecedenceTests(unittest.TestCase):
 
     def test_raising_or_none_get_config_is_the_default(self):
         self.runtime.set_ctx(StubCtx(raise_on_read=True))
-        self.assertEqual(self.runtime.setting("max_scrolls", 500), 500)
+        self.assertEqual(self.runtime.setting("generate_limit", 5), 5)
         self.runtime.set_ctx(StubCtx({"enrich": None}))
         self.assertEqual(self.runtime.setting("enrich", "llm"), "llm")
 
@@ -115,20 +124,59 @@ class SettingPrecedenceTests(unittest.TestCase):
         self.runtime.set_ctx(Bare())
         self.assertEqual(self.runtime.setting("enrich", "llm"), "llm")
 
+    def test_zero_setting_is_a_value_not_an_absence(self):
+        self.runtime.set_ctx(StubCtx({"llm_max_items": 0,
+                                      "generate_limit": 0}))
+        self.assertEqual(self.runtime.setting("llm_max_items", 50), 0)
+        self.assertEqual(self.runtime.setting("generate_limit", 5), 0)
+
+
+class BoundedArgTests(unittest.TestCase):
+    """The ONE per-call knob: it can only lower the configured cap."""
+
+    def setUp(self):
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+        self.plugin = _load_plugin()
+        from reapx_under_test import runtime
+        self.runtime = runtime
+
+    def tearDown(self):
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+
+    def test_lower_wins(self):
+        self.assertEqual(self.runtime.bounded_arg({"generate_limit": 2},
+                                                  "generate_limit", 5), 2)
+        self.assertEqual(self.runtime.bounded_arg({"generate_limit": 0},
+                                                  "generate_limit", 5), 0)
+
+    def test_raise_is_clamped_to_the_setting(self):
+        self.assertEqual(self.runtime.bounded_arg({"generate_limit": 99},
+                                                  "generate_limit", 5), 5)
+        self.assertEqual(self.runtime.bounded_arg({"generate_limit": 999999},
+                                                  "generate_limit", 0), 0)
+
+    def test_absent_junk_and_negative_mean_the_cap(self):
+        for args in ({}, None, {"generate_limit": None},
+                     {"generate_limit": "junk"},
+                     {"generate_limit": -4}):
+            self.assertEqual(
+                self.runtime.bounded_arg(args, "generate_limit", 5), 5,
+                args)
+
 
 @unittest.skipUnless(HAVE_HERMES, "plugin.yaml yaml + the engine map")
 class ConfigSchemaTests(unittest.TestCase):
 
     SCHEMA_DEFAULTS = {
-        "harvest_mode": "browser",
-        "browser": "auto",
-        "browser_profile": "Default",
-        "max_scrolls": 500,
         "import_dir": "",
         "enrich": "llm",
         "llm_max_items": 50,
         "generate_limit": 5,
-        "register_generated_skills": True,
+        "register_generated_skills": False,
     }
 
     def setUp(self):
@@ -159,11 +207,16 @@ class ConfigSchemaTests(unittest.TestCase):
         with (REPO_ROOT / "plugin.yaml").open(encoding="utf-8") as f:
             return yaml.safe_load(f)["config_schema"]
 
+    def test_exactly_the_five_settings(self):
+        """harvest_mode / browser / browser_profile / max_scrolls are gone:
+        the plugin touches no browser, and max_scrolls bounded a scroll loop
+        that no longer exists on the plugin path."""
+        self.assertEqual(sorted(self._schema()),
+                         sorted(self.SCHEMA_DEFAULTS))
+
     def test_every_key_has_type_label_description_default(self):
         schema = self._schema()
-        self.assertEqual(sorted(schema), sorted(self.SCHEMA_DEFAULTS))
         for key, spec in schema.items():
-            self.assertIn(key, self.SCHEMA_DEFAULTS, key)
             self.assertIn(spec["type"], ("str", "int", "float", "bool",
                                          "list", "dict", "secret"), key)
             self.assertIn("label", spec, key)
@@ -184,13 +237,12 @@ class ConfigSchemaTests(unittest.TestCase):
                 self.assertNotIn(":", default, key)
 
     def test_choices(self):
-        schema = self._schema()
-        self.assertEqual(schema["harvest_mode"]["choices"],
-                         ["browser", "export"])
-        self.assertEqual(schema["enrich"]["choices"], ["llm", "rules"])
-        self.assertEqual(schema["browser"]["choices"],
-                         ["auto", "brave", "chrome", "edge", "arc",
-                          "opera"])
+        self.assertEqual(self._schema()["enrich"]["choices"],
+                         ["llm", "rules"])
+
+    def test_registration_defaults_to_off(self):
+        self.assertIs(self._schema()["register_generated_skills"]["default"],
+                      False)
 
     def test_code_defaults_equal_the_schema_defaults(self):
         """plugin.yaml == the code (the defaults the handlers actually
@@ -199,31 +251,21 @@ class ConfigSchemaTests(unittest.TestCase):
         from reapx_under_test import runtime
         runtime.set_ctx(StubCtx({}))
         from reapx_under_test import harvest
-        p = harvest._Pipeline({}, "export")
+        p = harvest._Pipeline({})
         self.assertEqual(p.enrich, "llm")
         self.assertEqual(p.llm_max_items, 50)
         self.assertEqual(p.generate_limit, 5)
-        self.assertEqual(p.register_skills, True)
-        from reapx_under_test import tools
-        self.assertEqual(tools.runtime.setting("harvest_mode", "browser"),
-                         "browser")
-        self.assertEqual(tools.runtime.setting("browser", "auto"),
-                         "auto")
-        self.assertEqual(tools.runtime.setting("browser_profile",
-                                               "Default"), "Default")
-        self.assertEqual(tools.runtime.setting("max_scrolls", 500), 500)
-        self.assertEqual(tools.runtime.setting("import_dir", ""), "")
+        self.assertIs(p.register_skills, False)
+        self.assertEqual(runtime.setting("import_dir", ""), "")
 
 
-@unittest.skipUnless(HAVE_HERMES, "tools + the mode guards")
-class ModeGuardSettingsTests(unittest.TestCase):
+@unittest.skipUnless(HAVE_HERMES, "the driver + llm fallback")
+class DriverSettingUseTests(unittest.TestCase):
 
     def setUp(self):
         for name in list(sys.modules):
             if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
                 sys.modules.pop(name, None)
-        # pin the hermes home (the guards' one-arg-override paths run the
-        # driver → plugin-data)
         self.tmp = tempfile.TemporaryDirectory(prefix="reapx-guard-")
         self.addCleanup(self.tmp.cleanup)
         from hermes_constants import (reset_hermes_home_override,
@@ -235,8 +277,6 @@ class ModeGuardSettingsTests(unittest.TestCase):
         self.plugin = _load_plugin()
         from reapx_under_test import runtime
         self.runtime = runtime
-        from reapx_under_test import tools
-        self.tools = tools
 
     def tearDown(self):
         try:
@@ -247,41 +287,34 @@ class ModeGuardSettingsTests(unittest.TestCase):
             if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
                 sys.modules.pop(name, None)
 
-    def _run(self, raw):
-        return json.loads(raw)
+    def test_generate_limit_arg_is_capped_by_the_setting(self):
+        from reapx_under_test import harvest
+        self.runtime.set_ctx(StubCtx({"generate_limit": 3}))
+        self.assertEqual(harvest._Pipeline({"generate_limit": 2})
+                         .generate_limit, 2)
+        self.assertEqual(harvest._Pipeline({"generate_limit": 50})
+                         .generate_limit, 3)
+        self.assertEqual(harvest._Pipeline({}).generate_limit, 3)
 
-    def test_mode_guards_read_the_settings(self):
-        self.runtime.set_ctx(StubCtx({"harvest_mode": "export"}))
-        out = self._run(self.tools.harvest({}))
-        self.assertEqual(out["error"], "harvest_disabled_in_export_mode")
-        self.runtime.set_ctx(StubCtx({"harvest_mode": "browser"}))
-        out = self._run(self.tools.import_({}))
-        self.assertEqual(out["error"], "import_disabled_in_browser_mode")
+    def test_the_setting_zero_survives_the_driver(self):
+        """generate_limit=0 (assess-only) must not be turned into 5."""
+        from reapx_under_test import harvest
+        self.runtime.set_ctx(StubCtx({"generate_limit": 0}))
+        self.assertEqual(harvest._Pipeline({}).generate_limit, 0)
 
-    def test_tool_args_override_the_settings_mode(self):
-        # args > settings (one call), the runtime.setting precedence:
-        self.runtime.set_ctx(StubCtx({"harvest_mode": "export"}))
-        # harvest unlocked for one call by the arg (then fails cleanly —
-        # the browser "nonexistent" has no cookie DB):
-        out = self._run(self.tools.harvest(
-            {"harvest_mode": "browser", "browser": "nonexistent"}))
-        self.assertNotEqual(out["error"],
-                            "harvest_disabled_in_export_mode")
-        self.assertFalse(out["ok"])
-        # import unlocked for one call by the arg (no input given):
-        self.runtime.set_ctx(StubCtx({"harvest_mode": "browser"}))
-        out = self._run(self.tools.import_({"harvest_mode": "export"}))
-        self.assertNotEqual(out["error"],
-                            "import_disabled_in_browser_mode")
-        self.assertFalse(out["ok"])
+    def test_harvest_mode_arg_is_ignored(self):
+        """There is no harvest_mode setting any more — passing the old arg
+        changes nothing, the tool always runs the one pipeline."""
+        from reapx_under_test import harvest
+        self.runtime.set_ctx(StubCtx({}))
+        a = harvest._Pipeline({"harvest_mode": "browser", "enrich": "rules"})
+        self.assertEqual((a.enrich, a.generate_limit), ("llm", 5))
 
     def test_llm_max_items_zero_disables_the_llm(self):
         """The cap's documented meaning: 0 = zero ctx.llm calls."""
         from reapx_under_test import llm
 
         class Exploding:
-            calls = []
-
             @property
             def llm(self):
                 raise RuntimeError("must never be touched")

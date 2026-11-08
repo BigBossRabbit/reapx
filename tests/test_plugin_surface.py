@@ -6,7 +6,7 @@ optional steps degrades gracefully — same as under the validate probe).
 
 Guards (each maps to a gate that would otherwise only fail at admission):
   * register() runs against a recording stub WITHOUT raising, registers the
-    4 declared tools (R06) and nothing else;
+    3 declared tools (R06) and nothing else;
   * register() never touches the property surface the recording stub cannot
     provide (ctx.llm / ctx.state / ctx.manifest) — the validate probe's
     stub raises AttributeError for those, so touching one fails admission;
@@ -14,12 +14,12 @@ Guards (each maps to a gate that would otherwise only fail at admission):
     raises at load time otherwise) and declares its name;
   * tools.py handlers NEVER raise (the never-raise contract) and always
     return a JSON string;
-  * the mode guards: reapx_harvest refuses in export mode, reapx_import
-    refuses in browser mode (clean error JSON, exit-path safe);
+  * the tool arg allowlist: schemas declare only the permitted args
+    (settings are not callable);
   * _engine namespace adapter: load() imports the shared engine under the
     plugin's own namespace (never top-level), a missing engine import
-    becomes a RuntimeError (never a bare ImportError), and evict() pops the
-    reapx-exclusive top-level names;
+    becomes a RuntimeError (never a bare ImportError), the fetch chain is
+    never imported, and evict() pops the one reapx-exclusive top-level name;
   * register_skill with a non-existent path is a guarded error (the bundled
     skill loop never kills the load).
 """
@@ -133,11 +133,11 @@ class RegisterContractTests(unittest.TestCase):
             if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
                 sys.modules.pop(name, None)
 
-    def test_register_records_exactly_the_four_tools(self):
+    def test_register_records_exactly_the_three_tools(self):
         self.plugin.register(self.ctx)
         self.assertEqual(sorted(self.ctx.recorded["tools"]),
-                         sorted(["reapx_harvest", "reapx_import",
-                                 "reapx_status", "reapx_review"]))
+                         sorted(["reapx_import", "reapx_status",
+                                 "reapx_review"]))
 
     def test_register_never_touches_the_stub_forbidden_surface(self):
         self.plugin.register(self.ctx)
@@ -169,7 +169,7 @@ class RegisterContractTests(unittest.TestCase):
 
     def test_register_with_a_broken_optional_step_degrades(self):
         """A failing aux task (the recording stub raising, say) must never
-        kill the load: register() still records the 4 tools."""
+        kill the load: register() still records the 3 tools."""
         ctx = RecordingContext()
 
         def boom(*a, **k):
@@ -177,7 +177,7 @@ class RegisterContractTests(unittest.TestCase):
 
         ctx.register_auxiliary_task = boom
         self.plugin.register(ctx)
-        self.assertEqual(len(ctx.recorded["tools"]), 4)
+        self.assertEqual(len(ctx.recorded["tools"]), 3)
 
     def test_schemas_are_well_formed(self):
         from reapx_under_test import schemas  # the package copy
@@ -214,21 +214,16 @@ class NeverRaiseContractTests(unittest.TestCase):
         self.assertIsInstance(raw, str)
         return parsed
 
-    def test_harvest_guards_export_mode(self):
+    def test_import_runs_the_one_pipeline(self):
+        """No mode guards any more: reapx_import always reaches the driver.
+        Without hermes the driver fails at its data-dir lookup; with hermes
+        the missing input is the clean import_invalid error. Either way it
+        is error JSON, not a mode refusal."""
         from reapx_under_test import tools
-        ctx = RecordingContext()
-        ctx.get_config = lambda key, default=None: (
-            "export" if key == "harvest_mode" else default)
-        self.plugin.runtime.set_ctx(ctx)
-        out = self._json(tools.harvest({}))
+        out = self._json(tools.import_({}))
         self.assertFalse(out["ok"])
-        self.assertEqual(out["error"], "harvest_disabled_in_export_mode")
-
-    def test_import_guards_browser_mode(self):
-        from reapx_under_test import tools
-        out = self._json(tools.import_({}))  # default = browser mode
-        self.assertFalse(out["ok"])
-        self.assertEqual(out["error"], "import_disabled_in_browser_mode")
+        self.assertIsInstance(out["error"], str)
+        self.assertNotIn("disabled_in", out["error"])
 
     def test_status_never_raises_without_hermes(self):
         from reapx_under_test import tools
@@ -243,28 +238,88 @@ class NeverRaiseContractTests(unittest.TestCase):
     def test_handlers_accept_var_kwargs(self):
         import inspect
         from reapx_under_test import tools
-        for name in ("harvest", "import_", "status", "review"):
+        for name in ("import_", "status", "review"):
             sig = inspect.signature(getattr(tools, name))
             self.assertTrue(any(p.kind is inspect.Parameter.VAR_KEYWORD
                                 for p in sig.parameters.values()), name)
 
-    def test_harvest_with_a_raising_worker_returns_error_json(self):
+    def test_import_with_a_raising_worker_returns_error_json(self):
         from reapx_under_test import tools
-        plugin = self.plugin
 
         class Boom:
-            def run_harvest(self, args):
+            def run(self, args):
                 raise RuntimeError("engine exploded")
 
         import reapx_under_test.harvest as h
-        orig = h.run_harvest
-        h.run_harvest = Boom().run_harvest
+        orig = h.run
+        h.run = Boom().run
         try:
-            out = self._json(tools.harvest({"dry_run": True}))
+            out = self._json(tools.import_({"dry_run": True}))
         finally:
-            h.run_harvest = orig
+            h.run = orig
         self.assertFalse(out["ok"])
         self.assertIn("RuntimeError", out["error"])
+
+    def test_import_strips_undeclared_args(self):
+        """The tool is the allowlist's enforcement point: a call passing
+        settings-shaped args still reaches the driver without them."""
+        from reapx_under_test import tools
+
+        seen = {}
+
+        def fake(args):
+            seen.update(args)
+            return {"ok": True}
+
+        import reapx_under_test.harvest as h
+        orig = h.run
+        h.run = fake
+        try:
+            tools.import_({"items": [], "harvest_mode": "browser",
+                           "enrich": "rules", "register_generated_skills":
+                           True, "browser": "chrome", "profile": "Default",
+                           "max_scrolls": 3, "generate_limit": 2})
+        finally:
+            h.run = orig
+        self.assertEqual(sorted(seen), ["generate_limit", "items"])
+
+
+class SchemaAllowlistTests(unittest.TestCase):
+    """The arg surface is a fixed allowlist: no setting is callable."""
+
+    SETTINGS = {"harvest_mode", "browser", "browser_profile", "max_scrolls",
+                "import_dir", "enrich", "llm_max_items",
+                "register_generated_skills"}
+    ALLOWED = {
+        "reapx_import": {"path", "items", "generate_limit", "dry_run"},
+        "reapx_status": set(),
+        "reapx_review": {"since", "category", "opportunities_only",
+                         "include_skill_md"},
+    }
+
+    def setUp(self):
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+        self.plugin = _load_plugin()
+
+    def tearDown(self):
+        for name in list(sys.modules):
+            if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
+                sys.modules.pop(name, None)
+
+    def test_exactly_the_allowlisted_args_are_declared(self):
+        from reapx_under_test import schemas
+        self.assertEqual(sorted(schemas.ALL), sorted(self.ALLOWED))
+        for name, schema in schemas.ALL.items():
+            declared = set(schema["parameters"].get("properties") or {})
+            self.assertEqual(declared, self.ALLOWED[name], name)
+
+    def test_no_setting_name_is_a_tool_arg(self):
+        from reapx_under_test import schemas
+        for name, schema in schemas.ALL.items():
+            declared = set(schema["parameters"].get("properties") or {})
+            self.assertEqual(declared & self.SETTINGS, set(), name)
 
 
 class EngineAdapterTests(unittest.TestCase):
@@ -298,29 +353,33 @@ class EngineAdapterTests(unittest.TestCase):
         self.assertNotIn("categorize_repos", sys.modules)
         self.assertNotIn("generate_skills", sys.modules)
 
-    def test_load_never_imports_the_fetch_chain(self):
+    def test_load_never_imports_the_browser_chain(self):
+        """Review point 1: the plugin path touches no browser module."""
         from reapx_under_test import _engine
         _engine.load()
-        self.assertFalse(_engine._FETCH_LOADED)
         self.assertNotIn(PLUGIN_PKG + ".scripts.fetch_x_bookmarks",
                          sys.modules)
-        self.assertNotIn("browser_locator", sys.modules)
+        self.assertNotIn("reapx_browser_locator", sys.modules)
+        self.assertNotIn("reapx_cdp_launcher", sys.modules)
+        self.assertNotIn("cookie_store", sys.modules)
+        self.assertNotIn("fetch_x_bookmarks", sys.modules)
+        self.assertFalse(hasattr(_engine, "load_fetch"))
+        self.assertEqual(_engine.ENGINE_TOP_LEVEL, ("reapx_paths",))
 
     def test_broken_engine_import_is_a_runtimeerror(self):
         from reapx_under_test import _engine
-
-        real = _engine._boot_path
-
-        def broken():
-            raise ImportError("no such module")
-
-        _engine._boot_path = broken
+        key = PLUGIN_PKG + ".scripts"
+        old = sys.modules.get(key)
+        sys.modules[key] = None  # None in sys.modules ⇒ ImportError
         _engine._LOADED = False
         try:
             with self.assertRaises(RuntimeError):
                 _engine.load()
         finally:
-            _engine._boot_path = real
+            if old is None:
+                sys.modules.pop(key, None)
+            else:
+                sys.modules[key] = old
             _engine._LOADED = False
 
     def test_evict_pops_the_reapx_exclusive_top_levels(self):
@@ -407,7 +466,7 @@ class EngineAdapterTests(unittest.TestCase):
 
         ctx.register_skill = raising_reg
         self.plugin.register(ctx)  # must NOT raise
-        self.assertEqual(len(ctx.recorded["tools"]), 4)
+        self.assertEqual(len(ctx.recorded["tools"]), 3)
 
 
 if __name__ == "__main__":

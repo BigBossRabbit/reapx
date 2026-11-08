@@ -6,21 +6,23 @@ api_version: 1
 license: MIT
 author: BigBossRabbit
 homepage: https://github.com/BigBossRabbit/reapx
-tags: [skills, x, bookmarks, harvest, browser, cdp, automation]
+tags: [skills, x, bookmarks, export, automation]
 
 description: >-
-  Harvest your X bookmarks from your own logged-in browser (no paid X API) and
-  turn the ones that matter into ready-to-load Hermes skills. Incremental via a
-  persistent seen-ledger, two-track assessed (integrate-into-makeup +
-  business-opportunity), with optional LLM enrichment of the map / categorize /
-  assess stages through the host (ctx.llm) — zero keys, zero credentials in the
-  plugin. Falls back to the deterministic rules engine when no LLM is used.
-  Optional export mode works from a bookmarks file with zero browser reads.
+  Turn X (Twitter) bookmarks into ready-to-load Hermes skills. The plugin takes
+  bookmark DATA, never a browser session: an inline array the agent collected
+  with Hermes's own browser tool (with the user's consent), or a bookmarks file
+  the user points at — the plugin itself reads no cookie store and needs no X
+  API key. Incremental via a persistent seen-ledger, two-track assessed
+  (integrate-into-makeup + business-opportunity), with optional LLM enrichment
+  of the map / categorize / assess stages through the host (ctx.llm) — zero
+  keys, zero credentials in the plugin, and a deterministic rules fallback.
+  Skills land in reapx_review first; registering them is a setting, off by
+  default.
 
 # R06: must list EXACTLY what register() registers (hermes plugins validate
 # fails the entry otherwise; "N tools" chips come from here).
 provides_tools:
-  - reapx_harvest
   - reapx_import
   - reapx_status
   - reapx_review
@@ -33,59 +35,29 @@ provides_hooks: []             # v1 registers no hooks
 # in the catalog entry plugin-catalog/reapx.yaml.
 requires_hermes: ">=0.22.6"
 
-# R11: ReapX needs NO credentials at all. No requires_env. The browser session
-# is the user's own (harvest mode, see the README's R13 disclosures); export
-# mode needs nothing. The LLM runs host-owned via ctx.llm. This field is
-# intentionally absent.
+# R11: ReapX needs NO credentials at all. No requires_env. The plugin reads no
+# browser profile, no keychain, no .env. The LLM runs host-owned via ctx.llm.
+# This field is intentionally absent.
 
-# R10: floors + upper bounds; the engine-path subset. NOTE vs
-# requirements.txt (the STANDALONE list): PyYAML and requests are unused by
-# the engine path; cryptography and pywin32 are verify-path-only (standalone;
-# guarded imports) — NOT declared here. The plugin harvest path needs
-# jinja2 (generate_skills) + websocket-client (the CDP client).
+# R10: floors + upper bounds; the PLUGIN-path subset only. NOTE vs
+# requirements.txt (the STANDALONE list): websocket-client, PyYAML, requests
+# and cryptography belong to the standalone browser scripts, which the plugin
+# never imports. The plugin path needs exactly jinja2 (generate_skills).
 python_dependencies:
   - "jinja2>=3.0,<4"           # templating (generate_skills)
-  - "websocket-client>=1.6,<2" # the CDP client (fetch_x_bookmarks)
 
-# Every setting incl. the harvest-mode + export-mode ones. All land in
-# plugins.entries.reapx.settings.* and render as the Desktop Settings form.
+# Every setting lands in plugins.entries.reapx.settings.* and renders as the
+# Desktop Settings form. These are read from the plugin CONFIG ONLY — a tool
+# call cannot change them.
 config_schema:
-  harvest_mode:
-    type: str
-    choices: [browser, export]
-    default: browser
-    label: Harvest mode
-    description: >-
-      browser = read your bookmarks from your own logged-in Chromium-family
-      browser (the live Cookies SQLite is copied read-only into a temporary
-      profile and a headless browser reads them exactly like the real one; no
-      X API, nothing decrypted, nothing logged). export = process a bookmarks
-      file you provide instead (zero browser reads).
-  browser:
-    type: str
-    choices: [auto, brave, chrome, edge, arc, opera]
-    default: auto
-    label: Browser
-    description: Which installed Chromium-family browser carries your X login.
-  browser_profile:
-    type: str
-    default: "Default"
-    label: Browser profile
-    description: Profile directory name inside the chosen browser.
-  max_scrolls:
-    type: int
-    default: 500
-    label: Max scrolls
-    description: >-
-      Hard cap on the infinite-load scroll loop per harvest (1.8 s apart).
-      500 covers a full bookmark history; lower it (e.g. 60) for quick runs.
   import_dir:
     type: str
     default: ""
     label: Import directory
     description: >-
-      (export mode) Default directory reapx_import reads bookmark files from.
-      Empty = no default; the tool arg is required.
+      Default directory reapx_import reads x_bookmarks.json from when no
+      path/items is passed (the file a scheduled run uses). Empty = no
+      default; then a call must supply path or items.
   enrich:
     type: str
     choices: [llm, rules]
@@ -109,13 +81,15 @@ config_schema:
     default: 5
     label: Skills per category per run
     description: >-
-      Max skills generated per category per run (top by score; the engine
-      hardcodes 5). Set 0 to assess-only without generating skills.
+      Max skills generated per category per run (top by score). A single call
+      may lower this (its generate_limit arg), never raise it. 0 =
+      assess-only without generating skills.
   register_generated_skills:
     type: bool
-    default: true
+    default: false
     label: Register generated skills
     description: >-
       Register generated skills with the agent (namespaced reapx:<name>,
-      loaded with skill_view). If false, files are still written + reviewed
-      via reapx_review but not registered.
+      loaded with skill_view). Off by default: skill bodies come from other
+      people's tweets, so they land in reapx_review first. If false, files
+      are still written and reviewable, just not registered.

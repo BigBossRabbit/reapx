@@ -7,20 +7,17 @@ GitHub URL, a bitcoin-lightning one, an uncategorized mountain photo, a
 development-tools scraper), a pinned tmp HERMES_HOME (everything the run
 writes lands under it — never the real home, never the repo tree):
 
-  * **export mode, rules engine, bit-for-bit** — run_import(items) with
+  * **inline items, rules engine, bit-for-bit** — run(items) with
     enrich=rules: the engine files (starred/new/categorized/opportunities/
-    ledger) under plugin-data match a standalone-engine run on the same
-    fixture; nothing LLM-shaped anywhere (llm stats zero-error-zero-calls);
-  * **the browser-error model** (R12) — browser mode with a not-installed
-    browser returns the clean cookie_db_not_found error JSON (never raises,
-    never launches anything);
-  * **ZERO browser reads in export mode** (A.13 step 5's assert): after an
-    export run, the fetch chain was never imported (no fetch_x_bookmarks,
-    no browser_locator, no websocket) — the strictest-R11 mode is clean by
-    construction;
-  * **the single-flight lock** — a second concurrent run returns
-    harvest_already_running;
-  * **dry_run** — fetch + diff only: no generation, no ledger update,
+    ledger) under plugin-data are produced, nothing LLM-shaped anywhere
+    (llm stats zero-error-zero-calls);
+  * **ZERO browser reads** (point 1's assert): after any run, the browser
+    chain was never imported (no fetch_x_bookmarks, no
+    reapx_browser_locator, no websocket) — the plugin reads no credential
+    store by construction;
+  * **the single-flight lock** — a second concurrent run raises
+    HarvestBusy (the tool hands it back as a clean error);
+  * **dry_run** — load + diff only: no generation, no ledger update,
     nothing registered;
   * **0-new** — a second run over the same items is the R12-fast early
     return (the seen-ledger never forgets);
@@ -29,10 +26,11 @@ writes lands under it — never the real home, never the repo tree):
     disagreement is llm_override (review-only); an LLM Track-B hit lands in
     the review store ONLY (never the rules opportunities.json, never the
     ledger);
-  * **mode guards** — reapx_harvest refuses in export mode, reapx_import
-    in browser mode (handler-level guards);
-  * **register_generated_skills=false** — files + review rows + registry
-    rows, no register_skill calls;
+  * **settings are config-only** — an enrich arg in the call does not
+    change the engine; a generate_limit arg cannot exceed the setting;
+  * **register_generated_skills=false (the DEFAULT)** — files + review
+    rows + registry rows, no register_skill calls; setting it true
+    registers;
   * **no bookmark text in the sqlite store** (the review rows carry the
     text head only; the full text stays in the engine's data files).
 """
@@ -151,13 +149,13 @@ class HarvestDriverTests(unittest.TestCase):
             if name == PLUGIN_PKG or name.startswith(PLUGIN_PKG + "."):
                 sys.modules.pop(name, None)
 
-    # ── the export-mode rules run (bit-for-bit) ───────────────────────────
-    def test_export_rules_run_end_to_end(self):
+    # ── the inline-items rules run (bit-for-bit) ──────────────────────────
+    def test_items_rules_run_end_to_end(self):
         from reapx_under_test import harvest as h
-        ctx = RecordingCtx(settings={"harvest_mode": "export",
-                                     "enrich": "rules"})
+        ctx = RecordingCtx(settings={"enrich": "rules",
+                                     "register_generated_skills": True})
         self.plugin.runtime.set_ctx(ctx)
-        result = h.run_import({"items": self.fixture})
+        result = h.run({"items": self.fixture})
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(result["mode"], "export")
         self.assertEqual(result["fetched_total"], 4)
@@ -208,11 +206,11 @@ class HarvestDriverTests(unittest.TestCase):
         # nothing LLM-shaped
         self.assertEqual(result["llm"]["map"]["batches"], 0)
 
-    def test_zero_browser_reads_in_export_mode(self):
-        """A.13 step 5's assert: export mode never imports the fetch chain
-        (browser_locator / fetch_x_bookmarks / websocket)."""
+    def test_zero_browser_reads(self):
+        """Point 1's assert: the plugin path never imports the browser chain
+        (reapx_browser_locator / fetch_x_bookmarks / websocket)."""
         # a clean engine state first
-        for name in ("browser_locator", "cdp_launcher", "reapx_paths"):
+        for name in ("reapx_browser_locator", "reapx_cdp_launcher", "reapx_paths"):
             sys.modules.pop(name, None)
         for name in list(sys.modules):
             if name.endswith("fetch_x_bookmarks"):
@@ -220,37 +218,35 @@ class HarvestDriverTests(unittest.TestCase):
         from reapx_under_test import harvest as h
         from reapx_under_test import _engine
         _engine._LOADED = False
-        _engine._FETCH_LOADED = False
-        ctx = RecordingCtx(settings={"harvest_mode": "export",
-                                     "enrich": "rules"})
+        ctx = RecordingCtx(settings={"enrich": "rules",
+                                     "register_generated_skills": True})
         self.plugin.runtime.set_ctx(ctx)
-        result = h.run_import({"items": self.fixture})
+        result = h.run({"items": self.fixture})
         self.assertTrue(result.get("ok"), result)
-        self.assertFalse(_engine._FETCH_LOADED)
-        self.assertNotIn("browser_locator", sys.modules)
+        self.assertNotIn("reapx_browser_locator", sys.modules)
         self.assertFalse(any(m.endswith("fetch_x_bookmarks")
                              for m in sys.modules))
-        self.assertFalse(any(m.endswith("scripts.browser_locator")
+        self.assertFalse(any(m.endswith("scripts.reapx_browser_locator")
                              for m in sys.modules))
 
     def test_second_run_is_zero_new(self):
         from reapx_under_test import harvest as h
         self.plugin.runtime.set_ctx(RecordingCtx(
-            settings={"harvest_mode": "export", "enrich": "rules"}))
-        first = h.run_import({"items": self.fixture})
+            settings={"enrich": "rules"}))
+        first = h.run({"items": self.fixture})
         self.assertTrue(first["ok"])
         self.assertEqual(first["new_count"], 4)
-        second = h.run_import({"items": self.fixture})
+        second = h.run({"items": self.fixture})
         self.assertTrue(second["ok"], second)
         self.assertEqual(second["new_count"], 0)
         self.assertIn("No new bookmarks", second["note"])
 
     def test_dry_run_touches_nothing(self):
         from reapx_under_test import harvest as h
-        ctx = RecordingCtx(settings={"harvest_mode": "export",
-                                     "enrich": "rules"})
+        ctx = RecordingCtx(settings={"enrich": "rules",
+                                     "register_generated_skills": True})
         self.plugin.runtime.set_ctx(ctx)
-        result = h.run_import({"items": self.fixture, "dry_run": True})
+        result = h.run({"items": self.fixture, "dry_run": True})
         self.assertTrue(result.get("ok"), result)
         self.assertTrue(result["dry_run"])
         self.assertEqual(ctx.registered, [])  # nothing registered
@@ -260,19 +256,21 @@ class HarvestDriverTests(unittest.TestCase):
         if gen.exists():  # no generation
             self.assertEqual(list(gen.glob("*/*/SKILL.md")), [])
 
-    def test_the_error_model_no_installed_browser(self):
-        """Browser mode + a browser with no cookie DB = the clean
-        cookie_db_not_found error JSON (R12)."""
+    def test_missing_input_is_a_clean_error(self):
+        """No path, no items, no import_dir = import_invalid (a clean
+        JSON error, never a prompt, R12)."""
         from reapx_under_test import harvest as h
-        self.plugin.runtime.set_ctx(RecordingCtx(
-            settings={"harvest_mode": "browser", "enrich": "rules",
-                      "browser": "opera"}))
-        result = h.run_harvest({})
+        self.plugin.runtime.set_ctx(RecordingCtx(settings={}))
+        result = h.run({})
         self.assertFalse(result.get("ok"), result)
-        self.assertIn(result["error"],
-                      ("cookie_db_not_found", "no_browser_executable",
-                       "dependency_missing", "engine_error"))
-        self.assertIn("fix", result)
+        self.assertEqual(result["error"], "import_invalid")
+
+    def test_a_missing_import_file_is_import_not_found(self):
+        from reapx_under_test import harvest as h
+        self.plugin.runtime.set_ctx(RecordingCtx(settings={}))
+        result = h.run({"path": str(Path(self.tmp.name) / "nope.json")})
+        self.assertFalse(result.get("ok"), result)
+        self.assertEqual(result["error"], "import_not_found")
 
     def test_single_flight_lock(self):
         from reapx_under_test import harvest as h
@@ -280,54 +278,74 @@ class HarvestDriverTests(unittest.TestCase):
         h._FLIGHT["started"] = "just now"
         self.addCleanup(lambda: h._release())
         with self.assertRaises(h.HarvestBusy):
-            h.run_harvest({})
+            h.run({})
 
     def test_import_validation_errors(self):
         from reapx_under_test import harvest as h
         self.plugin.runtime.set_ctx(RecordingCtx(
-            settings={"harvest_mode": "export"}))
-        result = h.run_import({"items": [{"id": "", "text": "x"}]})
+            settings={"register_generated_skills": True}))
+        result = h.run({"items": [{"id": "", "text": "x"}]})
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "import_invalid")
-        result2 = h.run_import({})
-        self.assertFalse(result2["ok"])
-        self.assertEqual(result2["error"], "import_invalid")
 
     def test_import_accepts_a_path(self):
         from reapx_under_test import harvest as h
         path = Path(self.tmp.name) / "bookmarks.json"
         path.write_text(json.dumps(self.fixture), encoding="utf-8")
         self.plugin.runtime.set_ctx(RecordingCtx(
-            settings={"harvest_mode": "export", "enrich": "rules"}))
-        result = h.run_import({"path": str(path)})
+            settings={"enrich": "rules"}))
+        result = h.run({"path": str(path)})
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(result["fetched_total"], 4)
 
-    def test_mode_guards(self):
-        from reapx_under_test import tools
-        # export mode: harvest refuses
-        self.plugin.runtime.set_ctx(RecordingCtx(
-            settings={"harvest_mode": "export"}))
-        out = json.loads(tools.harvest({}))
-        self.assertEqual(out["error"], "harvest_disabled_in_export_mode")
-        # browser mode: import refuses
-        self.plugin.runtime.set_ctx(RecordingCtx(
-            settings={"harvest_mode": "browser"}))
-        out = json.loads(tools.import_({}))
-        self.assertEqual(out["error"], "import_disabled_in_browser_mode")
-
-    def test_register_generated_skills_false(self):
+    def test_import_dir_setting_is_the_fallback_input(self):
         from reapx_under_test import harvest as h
-        ctx = RecordingCtx(settings={"harvest_mode": "export",
-                                     "enrich": "rules",
-                                     "register_generated_skills": False})
+        folder = Path(self.tmp.name) / "inbox"
+        folder.mkdir()
+        (folder / "x_bookmarks.json").write_text(
+            json.dumps(self.fixture), encoding="utf-8")
+        self.plugin.runtime.set_ctx(RecordingCtx(
+            settings={"enrich": "rules", "import_dir": str(folder)}))
+        result = h.run({})
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["fetched_total"], 4)
+
+    def test_undeclared_args_do_not_change_the_settings(self):
+        """Point 3: a call passing enrich/llm_max_items/register args is
+        ignored — only the config counts."""
+        from reapx_under_test import harvest as h
+        ctx = RecordingCtx(settings={"enrich": "rules"})
         self.plugin.runtime.set_ctx(ctx)
-        result = h.run_import({"items": self.fixture})
+        result = h.run({"items": self.fixture, "enrich": "llm",
+                        "register_generated_skills": True,
+                        "llm_max_items": 999})
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["enrichment"], "rules")  # the setting won
+        self.assertEqual(ctx.registered, [])             # still off
+        opp = self.home / "plugin-data" / "reapx" / "opportunities.json"
+        self.assertTrue(opp.is_file())
+
+    def test_generate_limit_arg_cannot_exceed_the_setting(self):
+        from reapx_under_test import harvest as h
+        # the setting says 0 (assess only); the call asks for 9:
+        self.plugin.runtime.set_ctx(RecordingCtx(
+            settings={"enrich": "rules", "generate_limit": 0}))
+        capped = h.run({"items": self.fixture, "generate_limit": 9})
+        self.assertTrue(capped.get("ok"), capped)
+        self.assertEqual(capped["skills"]["generated"], 0)
+        self.assertIn("generate_limit=0", capped["skills"]["skipped"])
+
+    def test_register_generated_skills_false_by_default(self):
+        from reapx_under_test import harvest as h
+        ctx = RecordingCtx(settings={"enrich": "rules"})
+        self.plugin.runtime.set_ctx(ctx)
+        result = h.run({"items": self.fixture})
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(ctx.registered, [])  # NOT registered
         self.assertEqual(result["registered_skills"], [])
         self.assertEqual(result["skills"]["generated"], 3)  # files written
         self.assertEqual(result["review_rows"], 4)  # reviewable
+        self.assertIn("register_generated_skills=false", result["note"])
         # the registry rows exist but registered=0
         db = sqlite3.connect(self.home / "plugin-data" / "reapx"
                              / "data.db")
@@ -341,8 +359,8 @@ class HarvestDriverTests(unittest.TestCase):
         stays in the engine's data files)."""
         from reapx_under_test import harvest as h
         self.plugin.runtime.set_ctx(RecordingCtx(
-            settings={"harvest_mode": "export", "enrich": "rules"}))
-        h.run_import({"items": self.fixture})
+            settings={"enrich": "rules"}))
+        h.run({"items": self.fixture})
         db = sqlite3.connect(self.home / "plugin-data" / "reapx"
                              / "data.db")
         heads = [r[0] for r in db.execute("SELECT text_head FROM review")]
@@ -428,10 +446,10 @@ class HarvestDriverTests(unittest.TestCase):
                  "opportunity": None, "opportunity_rationale": ""},
             ]}),
         ])
-        ctx = RecordingCtx(settings={"harvest_mode": "export",
-                                     "enrich": "llm"}, llm=llm)
+        ctx = RecordingCtx(settings={"enrich": "llm",
+                                     "register_generated_skills": True}, llm=llm)
         self.plugin.runtime.set_ctx(ctx)
-        result = h.run_import({"items": fixture})
+        result = h.run({"items": fixture})
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(result["enrichment"], "llm")
 

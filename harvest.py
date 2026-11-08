@@ -1,10 +1,18 @@
 """harvest.py — the in-process pipeline driver (spec A.3.1/A.5).
 
-What ``scripts/daily_sync.sh`` orchestrates as a shell pipeline, run
-in-process inside a tool handler — the same engine stages, in the same
-order, into the host-owned ``plugin_data_dir("reapx")`` (A.2.1.2's seam):
+The plugin takes bookmark INPUT only; it never drives a browser and never
+reads a browser credential store. Two input shapes, one pipeline:
 
-  ① fetch (browser mode only)      fetch_x_bookmarks.main(argv)
+  * ``path``  — a bookmarks file the user points at (export mode);
+  * ``items`` — an inline array the AGENT collected itself through the
+    host's own browser tool (the host owns that consent), passed straight
+    in.
+
+Both go through the same validation (``export_import``) and then the same
+engine stages, in this order, into the host-owned
+``plugin_data_dir("reapx")`` (A.2.1.2's seam):
+
+  ① input load                     export_import.load(path=…, items=…)
   ② map                            map_bookmarks.main(["--data-dir", …])
   ③ ledger diff (0 new ⇒ exit)     ledger.diff_new / write new_repos.json
   ④ llm.enrich_map                 (A.4.2 map: the LLM identity pass)
@@ -42,15 +50,13 @@ output (verified by test_harvest_driver's rules-mode fixture run vs the
 standalone engine output).
 
 **The error model (A.3.1, R12)**: every failure = a clean ``{"ok": false,
-"error": <kind>, "detail": …}`` — cookie_db_not_found (installed browsers +
-"or switch harvest_mode=export"), login_redirect (dead session: re-login to
-X in <browser> and re-run), no_browser_executable, cdp_up_timeout,
-dependency_missing, harvest_already_running, import_* (export mode),
-llm_unavailable (NOT an error: enrichment=rules + llm.errors) — never a
-prompt, never a hang, nothing that waits for a person.
+"error": <kind>, "detail": …}`` — import_not_found / import_invalid (the
+input), map_failed, dependency_missing, already_running, internal —
+never a prompt, never a hang, nothing that waits for a person.
+``llm_unavailable`` is NOT an error: enrichment=rules + llm.errors.
 
 The single-flight lock makes cron + interactive + a curious model call the
-harvest twice safe.
+pipeline twice safe.
 """
 from __future__ import annotations
 
@@ -72,16 +78,16 @@ class HarvestBusy(RuntimeError):
     """A second concurrent harvest (clean error JSON, R12)."""
 
 
-def _acquire(mode: str) -> float:
+def _acquire() -> float:
     with _FLIGHT_LOCK:
         if _FLIGHT["running"]:
             started = _FLIGHT["started"]
             raise HarvestBusy(
-                f"harvest already running (started {started})")
+                f"run already in progress (started {started})")
         _FLIGHT["running"] = True
         _FLIGHT["started"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                                            time.gmtime())
-        _FLIGHT["mode"] = mode
+        _FLIGHT["mode"] = "export"
         return time.time()
 
 
@@ -97,11 +103,11 @@ def harvest_running() -> bool:
         return bool(_FLIGHT["running"])
 
 
-# ── the fetch error model (A.3.1) ────────────────────────────────────────────
+# ── the input error model (A.3.1) ────────────────────────────────────────────
 
 
 class HarvestError(RuntimeError):
-    """A mapped harvest failure (kind + fix, never a traceback)."""
+    """A mapped pipeline failure (kind + detail, never a traceback)."""
 
     def __init__(self, kind: str, detail: str = "", extra: dict | None = None):
         super().__init__(f"{kind}: {detail}" if detail else kind)
@@ -110,43 +116,12 @@ class HarvestError(RuntimeError):
         self.extra = extra or {}
 
 
-def _map_fetch_error(exc: BaseException) -> HarvestError:
-    """Map the engine's RuntimeErrors onto the A.3.1 error kinds."""
-    text = str(exc) or type(exc).__name__
-    if "Cookie DB not found" in text or "Source cookie DB not found" in text:
-        installed = "unavailable"
-        try:
-            import sys as _sys
-            _scripts = str(Path(__file__).resolve().parent / "scripts")
-            if _scripts not in _sys.path:
-                _sys.path.insert(0, _scripts)
-            # browser_locator is a reapx-exclusive top-level name (see
-            # _engine); a lazy guarded import never fails the error path.
-            from browser_locator import get_installed_browsers  # type: ignore
-            installed = ", ".join(get_installed_browsers() or ["none"])
-        except Exception:
-            installed = "unavailable"
-        return HarvestError(
-            "cookie_db_not_found", text,
-            {"installed_browsers": installed,
-             "fix": "is the right one logged into X? or switch "
-                    "harvest_mode=export (zero browser reads)"})
-    if "Redirected to login" in text:
-        return HarvestError(
-            "login_redirect", text,
-            {"fix": "the copied session was not accepted — re-login to X in "
-                    "the selected browser and re-run"})
-    if "executable found" in text:
-        return HarvestError("no_browser_executable", text)
-    if "CDP endpoint never came up" in text:
-        return HarvestError("cdp_up_timeout", text)
-    if "websocket" in text.lower():
-        return HarvestError(
-            "dependency_missing", text,
-            {"fix": "install the plugin's python dependencies "
-                    "(hermes plugins install resolves them; run hermes pm "
-                    "repair + restart if the plugin was just enabled)"})
-    return HarvestError("engine_error", text)
+def _int_setting(key: str, default: int) -> int:
+    """An int setting from the plugin config only (0 is a VALUE, not 'unset')."""
+    try:
+        return int(runtime.setting(key, default))
+    except (TypeError, ValueError):
+        return default
 
 
 # ── the run record (reapx_status' data) ──────────────────────────────────────
@@ -175,28 +150,31 @@ def _write_run_state(state: dict) -> None:
 
 # ── the driver ───────────────────────────────────────────────────────────────
 
-# The A.3.1 note, written from the probe's answer (never from hope).
-NOTE = ("New skills are registered and loadable now with "
-        "skill_view(\"reapx:<name>\"), listed by reapx_status/reapx_review, "
-        "and appear in skills_list + the skills index on the next prompt "
-        "build; a plugin (re)load re-registers them from the plugin_db "
-        "registry (the guaranteed form).")
+# The A.3.1 notes (register_generated_skills now defaults to FALSE: skill
+# bodies come from other people's tweets, so they land in reapx_review
+# first and registration is the user's explicit choice).
+NOTE_REGISTERED = ("New skills are registered and loadable now with "
+                   "skill_view(\"reapx:<name>\"), listed by reapx_status/"
+                   "reapx_review, and appear in skills_list + the skills "
+                   "index on the next prompt build; a plugin (re)load "
+                   "re-registers them from the plugin_db registry (the "
+                   "guaranteed form).")
+
+NOTE_NOT_REGISTERED = ("register_generated_skills=false (the default): the "
+                       "skills were written to the plugin data dir and are "
+                       "listed by reapx_review, but not registered with the "
+                       "agent. Read them, then turn the setting on to "
+                       "register.")
 
 NOTE_RULES = ("No LLM enrichment was applied (enrich=rules): the "
-              "deterministic rules engine ran bit-for-bit. Generated skills "
-              "are loadable now with skill_view(\"reapx:<name>\").")
-
-NOTE_EXPORT = ("Export mode: zero browser reads (the bookmarks came from a "
-               "file/inline array). New skills are loadable now with "
-               "skill_view(\"reapx:<name>\").")
+              "deterministic rules engine ran bit-for-bit.")
 
 
 class _Pipeline:
-    """One harvest run (browser or export mode)."""
+    """One run (file input or inline items — always the same pipeline)."""
 
-    def __init__(self, args: dict, mode: str):
+    def __init__(self, args: dict):
         self.args = dict(args or {})
-        self.mode = mode
         from . import skills_out
         self.so = skills_out
         self.data = skills_out.data_dir()
@@ -208,73 +186,45 @@ class _Pipeline:
         self.categorized = self.data / "categorized_repos.json"
         self.opportunities = self.data / "opportunities.json"
         self.ledger_path = self.data / "ledger.json"
-        # settings (args > settings > defaults)
-        self.enrich = runtime.setting("enrich", "llm", self.args) or "llm"
-        self.llm_max_items = int(runtime.setting("llm_max_items", 50,
-                                                 self.args) or 50)
-        self.generate_limit = int(runtime.setting("generate_limit", 5,
-                                                  self.args) or 5)
-        self.register_skills = bool(runtime.setting("register_generated_skills",
-                                                    True, self.args))
+        # settings — from the plugin config ONLY (never tool args)
+        self.enrich = str(runtime.setting("enrich", "llm") or "llm")
+        self.llm_max_items = _int_setting("llm_max_items", 50)
+        self.register_skills = bool(
+            runtime.setting("register_generated_skills", False))
+        # generate_limit: the ONE bounded per-call arg — a call may lower
+        # the configured cap, never raise it
+        self.generate_limit = runtime.bounded_arg(
+            self.args, "generate_limit", _int_setting("generate_limit", 5))
         self.dry_run = bool(self.args.get("dry_run"))
-        self.result: dict = {"ok": True, "mode": mode}
+        self.result: dict = {"ok": True, "mode": "export"}
         # the enrichment layers' outputs (set as the run progresses)
         self._llm_map: dict = {}
         self._llm_cat: dict = {}
         self._llm_assess: dict = {}
         self.assess_data: dict = {}
 
-    # ── ① fetch (browser mode) ──────────────────────────────────────────
-    def fetch(self):
-        from . import _engine
-        # EVERYTHING inside the error-mapping try (load_fetch included: a
-        # missing websocket-client must map to dependency_missing, never
-        # escape as a SystemExit/RuntimeError into the internal catch).
-        try:
-            _engine.load_fetch()
-            argv = ["--output", str(self.x_bookmarks)]
-            browser = runtime.setting("browser", "auto", self.args)
-            profile = runtime.setting("browser_profile", "Default",
-                                      self.args)
-            max_scrolls = runtime.setting("max_scrolls", 500, self.args)
-            if browser:
-                argv += ["--browser", str(browser)]
-            if profile:
-                argv += ["--profile", str(profile)]
-            if max_scrolls:
-                argv += ["--max-scrolls", str(int(max_scrolls))]
-            _engine.fetch_x_bookmarks.main(argv)
-        except HarvestError:
-            raise
-        except SystemExit as exc:  # the fetcher's missing-dep exit
-            raise _map_fetch_error(exc) from exc
-        except BaseException as exc:  # RuntimeError etc.
-            raise _map_fetch_error(exc) from exc
-        total = self._count(self.x_bookmarks)
-        self.result["fetched_total"] = total
-        self.result["browser"] = str(browser or "auto")
-
-    # ── ①' export-mode input (A.5.3) ────────────────────────────────────
+    # ── ① input load (A.5.3) ────────────────────────────────────────────
     def load_input(self):
         from . import export_import
         path = self.args.get("path")
         items = self.args.get("items")
-        if not path and not items:
-            import_dir = runtime.setting("import_dir", "", self.args)
+        if not path and items is None:
+            import_dir = str(runtime.setting("import_dir", "") or "")
             if import_dir:
                 path = str(Path(import_dir).expanduser()
                            / "x_bookmarks.json")
         try:
             bookmarks = export_import.load(path=path, items=items)
         except export_import.ImportValidationError as exc:
-            raise HarvestError("import_invalid", str(exc)) from exc
+            kind = ("import_not_found" if "not found" in str(exc)
+                    else "import_invalid")
+            raise HarvestError(kind, str(exc)) from exc
         self.data.mkdir(parents=True, exist_ok=True)
         tmp = self.x_bookmarks.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(bookmarks, indent=2, ensure_ascii=False),
                        encoding="utf-8")
         tmp.replace(self.x_bookmarks)
         self.result["fetched_total"] = len(bookmarks)
-        self.result["browser"] = None
 
     # ── ② map ───────────────────────────────────────────────────────────
     def map(self):
@@ -589,38 +539,25 @@ class _Pipeline:
         tmp.replace(path)
 
 
-# ── the entry points (tools.py calls these) ──────────────────────────────────
+# ── the entry point (tools.py calls this) ────────────────────────────────────
 
 
-def run_harvest(args: dict | None = None) -> dict:
-    """reapx_harvest (browser mode): the A.3.1 handler flow."""
+def run(args: dict | None = None) -> dict:
+    """reapx_import: the whole pipeline over a file or inline items."""
     args = dict(args or {})
-    _acquire("browser")
+    _acquire()
     try:
-        return _run(args, "browser")
+        return _run(args)
     finally:
         _release()
 
 
-def run_import(args: dict | None = None) -> dict:
-    """reapx_import (export mode): step ① replaced by the input load."""
-    args = dict(args or {})
-    _acquire("export")
-    try:
-        return _run(args, "export")
-    finally:
-        _release()
-
-
-def _run(args: dict, mode: str) -> dict:
-    p = _Pipeline(args, mode)
+def _run(args: dict) -> dict:
+    p = _Pipeline(args)
     enrich = p.enrich
     try:
-        # ① fetch / load input
-        if mode == "browser":
-            p.fetch()
-        else:
-            p.load_input()
+        # ① input load
+        p.load_input()
 
         # ② map
         p.map()
@@ -637,11 +574,11 @@ def _run(args: dict, mode: str) -> dict:
             _record(p, ok=True)
             return p.result
 
-        # dry run: fetch + diff (+ enrich) only
+        # dry run: input + diff (+ enrich) only
         if p.dry_run:
             llm_map, map_stats = p.enrich_and_resolve(new)
             p.result["dry_run"] = True
-            p.result["note"] = ("Dry run: fetched + diffed + enriched only; "
+            p.result["note"] = ("Dry run: loaded + diffed + enriched only; "
                                 "no generation, no ledger update, nothing "
                                 "registered.")
             _record(p, ok=True)
@@ -687,15 +624,10 @@ def _run(args: dict, mode: str) -> dict:
         p.result["llm"] = {"map": p.result.get("llm_map", {}),
                            "categorize": p.result.get("llm_categorize", {}),
                            "assess": p.result.get("llm_assess", {})}
-        p.result["note"] = (NOTE if p.register_skills else
-                            "register_generated_skills=false: files written "
-                            "+ reviewable via reapx_review, not registered.")
+        p.result["note"] = (NOTE_REGISTERED if p.register_skills
+                            else NOTE_NOT_REGISTERED)
         if p.result["enrichment"] == "rules" and enrich == "rules":
-            p.result["note"] = (NOTE_RULES if p.register_skills else
-                                "register_generated_skills=false.")
-        if mode == "export":
-            p.result["note"] = (NOTE_EXPORT if p.register_skills else
-                                "register_generated_skills=false.")
+            p.result["note"] = (NOTE_RULES + " " + p.result["note"])
         p.result["new_sample"] = _sample(new)
         _record(p, ok=True)
         return p.result
@@ -703,7 +635,7 @@ def _run(args: dict, mode: str) -> dict:
     except HarvestBusy:
         raise
     except HarvestError as exc:
-        err = {"ok": False, "error": exc.kind, "mode": mode}
+        err = {"ok": False, "error": exc.kind, "mode": "export"}
         if exc.detail:
             err["detail"] = exc.detail
         if exc.extra:
@@ -712,9 +644,9 @@ def _run(args: dict, mode: str) -> dict:
         _record(p, ok=False)
         return err
     except Exception as exc:  # never raise out of the driver
-        runtime.log.error("reapx harvest failed: %s", exc, exc_info=True)
-        err = {"ok": False, "error": "internal",
-               "mode": mode, "detail": f"{type(exc).__name__}: {exc}"}
+        runtime.log.error("reapx run failed: %s", exc, exc_info=True)
+        err = {"ok": False, "error": "internal", "mode": "export",
+               "detail": f"{type(exc).__name__}: {exc}"}
         p.result.update(err)
         _record(p, ok=False)
         return err
@@ -741,7 +673,7 @@ def _record(p: _Pipeline, ok: bool) -> None:
     state = _read_run_state()
     state["last_run"] = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "mode": p.mode, "ok": ok,
+        "mode": "export", "ok": ok,
         "error": None if ok else p.result.get("error"),
         "detail": None if ok else p.result.get("detail"),
         "fetched_total": p.result.get("fetched_total"),
@@ -751,7 +683,7 @@ def _record(p: _Pipeline, ok: bool) -> None:
         "llm": p.result.get("llm", {}),
         "dry_run": p.dry_run,
     }
-    state["harvest_mode"] = p.mode
+    state["harvest_mode"] = "export"
     state["register_generated_skills"] = p.register_skills
     try:
         _write_run_state(state)

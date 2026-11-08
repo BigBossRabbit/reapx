@@ -1,82 +1,55 @@
-"""schemas.py — the four registered tool schemas (spec A.3, verbatim).
+"""schemas.py — the three registered tool schemas (spec A.3, verbatim).
 
 Every handler returns a JSON string always and never raises (tools.py). The
 ``description`` fields are how the model decides when to use a tool.
+
+The arg surface is a DELIBERATE allowlist: settings (enrich, llm_max_items,
+import_dir, generate_limit, register_generated_skills) are the user's and are
+read from the plugin config only. A call may pass per-call DATA (path/items)
+and the two per-call knobs that can only narrow the configured run
+(generate_limit, dry_run).
 """
 from __future__ import annotations
-
-HARVEST = {
-    "name": "reapx_harvest",
-    "description": (
-        "Harvest the user's X (Twitter) bookmarks from their own logged-in "
-        "Chromium-family browser (Brave/Chrome/Edge/Arc/Opera) WITHOUT the paid "
-        "X API: the live browser's Cookies SQLite is copied read-only into a "
-        "temporary profile and a headless browser reads the bookmark history "
-        "exactly like the real one (nothing is decrypted, logged or persisted). "
-        "Then, INCREMENTALLY (a persistent seen-ledger): maps each NEW bookmark "
-        "to a skill schema, categorizes it into one of 12 domains, runs a "
-        "two-track assessment (worth integrating into the user's own makeup / "
-        "business-opportunity value), and generates ready-to-load skills "
-        "(registered namespaced as reapx:<name>, returned in the result). "
-        "Long-running (scroll loop, minutes) — use max_scrolls to bound it. "
-        "Use when the user mentions their X bookmarks, saving things on X, or "
-        "refreshing their skill library from X."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "browser":    {"type": "string",
-                           "enum": ["auto", "brave", "chrome", "edge", "arc", "opera"],
-                           "description": "Override the settings browser (default settings value)."},
-            "profile":    {"type": "string",
-                           "description": "Browser profile directory name (default settings value)."},
-            "max_scrolls": {"type": "integer", "minimum": 1, "maximum": 500,
-                           "description": "Cap on the infinite-scroll loop (default settings; "
-                                          "use 40-80 for a quick run of recent bookmarks)."},
-            "enrich":     {"type": "string", "enum": ["llm", "rules"],
-                           "description": "One-run override of the enrichment engine "
-                                          "(default settings value)."},
-            "generate_limit": {"type": "integer", "minimum": 0, "maximum": 25,
-                           "description": "Max skills generated per category this run "
-                                          "(default settings value)."},
-            "dry_run":    {"type": "boolean", "default": False,
-                           "description": "Fetch + diff + enrich only; no generation, "
-                                          "no ledger update, nothing registered."},
-        },
-        "required": [],
-    },
-}
 
 IMPORT = {
     "name": "reapx_import",
     "description": (
-        "Process X bookmarks WITHOUT reading the browser: from a bookmarks file "
-        "or an inline list in the exact x_bookmarks.json schema "
-        "([{id, author, text, created_at, urls}]). Runs the identical incremental "
-        "pipeline (ledger diff → map/categorize/assess → generate → register). "
-        "Zero browser reads, zero cookies — the strictest-privacy mode. Use when "
-        "harvest_mode=export, when the user has a bookmarks export, or when the "
-        "agent itself has collected the bookmarks (e.g. via its own browser "
-        "tools) and passes them in."
+        "Turn X (Twitter) bookmarks into ready-to-load Hermes skills. Takes the "
+        "bookmarks as DATA — either an inline `items` array (the agent reads "
+        "x.com/i/history with its own browser tool, with the user's consent, "
+        "and passes the items in) or a `path` to a bookmarks JSON file. The "
+        "plugin itself never touches a browser or a cookie store. Then, "
+        "INCREMENTALLY (a persistent seen-ledger): maps each NEW bookmark to a "
+        "skill schema, categorizes it into one of 12 domains, runs a two-track "
+        "assessment (worth integrating into the user's own makeup / "
+        "business-opportunity value), and generates skill files that "
+        "`reapx_review` lists (registered namespaced as reapx:<name> only when "
+        "the register_generated_skills setting is on). Use when the user "
+        "mentions their X bookmarks, saving things on X, or refreshing their "
+        "skill library from X."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "path":  {"type": "string",
-                      "description": "Path to a file containing a JSON array of bookmarks "
-                                     "in the x_bookmarks.json schema (required unless "
-                                     "items is given)."},
+                      "description": "Path to a JSON array of bookmarks in the "
+                                     "x_bookmarks.json schema ([{id, author, "
+                                     "text, created_at, urls}]). Required unless "
+                                     "items is given; falls back to the "
+                                     "import_dir setting."},
             "items": {"type": "array", "items": {"type": "object"},
-                      "description": "Inline bookmark array (same schema) — e.g. what the "
-                                     "agent collected itself."},
-            "format": {"type": "string", "enum": ["reapx_bookmarks"],
-                      "default": "reapx_bookmarks",
-                      "description": "v1.0 supports the documented reapx_bookmarks "
-                                     "format only (an X-data-export adapter is a "
-                                     "verified-layout build item, not a guess)."},
-            "enrich": {"type": "string", "enum": ["llm", "rules"]},
-            "generate_limit": {"type": "integer", "minimum": 0, "maximum": 25},
-            "dry_run": {"type": "boolean", "default": False},
+                      "description": "Inline bookmark array (same schema) — what "
+                                     "the agent collected itself. Use instead of "
+                                     "path (path wins if both are given)."},
+            "generate_limit": {"type": "integer", "minimum": 0,
+                               "description": "Per-call cap on skills generated "
+                                              "per category; may only LOWER the "
+                                              "generate_limit setting, never "
+                                              "raise it. 0 = assess only."},
+            "dry_run": {"type": "boolean", "default": False,
+                        "description": "Load + diff + enrich only; no "
+                                       "generation, no ledger update, nothing "
+                                       "registered."},
         },
         "required": [],
     },
@@ -85,12 +58,12 @@ IMPORT = {
 STATUS = {
     "name": "reapx_status",
     "description": (
-        "Read-only ReapX status: harvest mode, last run, ledger counts "
-        "(total seen / new last run), skills generated + registered "
-        "(namespaced names), last two-track assessment counts, LLM enrichment "
-        "state (engine used, items, errors), and pending review items. Use "
-        "before/after a harvest, or whenever the user asks what ReapX has done "
-        "or what skills it gave them."
+        "Read-only ReapX status: last run, ledger counts (total seen / new "
+        "last run), skills generated + registered (namespaced names), last "
+        "two-track assessment counts, LLM enrichment state (engine used, "
+        "items, errors), and pending review items. Use before/after a run, "
+        "or whenever the user asks what ReapX has done or what skills it "
+        "gave them."
     ),
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
@@ -98,13 +71,15 @@ STATUS = {
 REVIEW = {
     "name": "reapx_review",
     "description": (
-        "Review what the last harvest produced, item by item: each new bookmark "
+        "Review what the last run produced, item by item: each new bookmark "
         "with its tweet text, category, two-track assessment (integrate-into-"
         "makeup / business-opportunity + rationale), and the generated skill "
-        "(namespaced name + frontmatter head). Supports since/category/opportunity "
-        "filters. This is the human-in-the-loop surface of the two-track "
-        "assessment — LLM-derived opportunities land here, never silently in "
-        "the ledger."
+        "(namespaced name + frontmatter head). Supports since/category/"
+        "opportunity filters. This is the human-in-the-loop surface of the "
+        "two-track assessment — LLM-derived opportunities land here, never "
+        "silently in the ledger. Read this before turning "
+        "register_generated_skills on: skill bodies come from other people's "
+        "tweets."
     ),
     "parameters": {
         "type": "object",
@@ -121,4 +96,4 @@ REVIEW = {
     },
 }
 
-ALL = {s["name"]: s for s in (HARVEST, IMPORT, STATUS, REVIEW)}
+ALL = {s["name"]: s for s in (IMPORT, STATUS, REVIEW)}

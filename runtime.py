@@ -52,16 +52,21 @@ def get_ctx():
         return _CTX
 
 
-def setting(key: str, default=None, args: dict | None = None):
-    """Read one plugin setting: tool args > plugins.entries.reapx.settings >
-    *default* (the config_schema default — the caller passes it; never None so
-    the probe stub's get_config and an unconfigured plugin behave the same).
+def setting(key: str, default=None):
+    """Read one plugin setting from the plugin CONFIG only:
+    ``plugins.entries.reapx.settings.<key>`` > *default* (the config_schema
+    default — the caller passes it; never None so the probe stub's
+    get_config and an unconfigured plugin behave the same).
+
+    Tool args never take part: a prompt-injected call must not be able to
+    flip ``enrich``, lift ``llm_max_items``, force registration or switch
+    ``import_dir`` behind the user's back. The one exception is a value
+    that is *per call* by nature and can only LOWER its setting — see
+    :func:`bounded_arg`.
 
     Never touches ctx.llm / ctx.state; returns the default whenever the
     context is missing (tests) or the key is unset.
     """
-    if args is not None and args.get(key) is not None:
-        return args.get(key)
     ctx = get_ctx()
     if ctx is None:
         return default
@@ -70,6 +75,27 @@ def setting(key: str, default=None, args: dict | None = None):
     except Exception:  # pragma: no cover — a settings read must never crash
         return default
     return default if value is None else value
+
+
+def bounded_arg(args: dict | None, key: str, cap):
+    """A per-call tool arg that may only ever LOWER the configured *cap*.
+
+    The caller passes the setting as *cap*; the arg (if any) is clamped
+    into ``0..cap``. A missing, unparsable or negative arg = the cap. A
+    cap of 0 (the documented "off") stays 0.
+    """
+    if not args or args.get(key) is None:
+        return cap
+    try:
+        value = int(args[key])
+    except (TypeError, ValueError):
+        return cap
+    if value < 0:
+        return cap
+    try:
+        return min(value, int(cap))
+    except (TypeError, ValueError):
+        return value
 
 
 # ── on_unload hooks (engine-module eviction etc.) ────────────────────────────

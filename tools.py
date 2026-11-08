@@ -1,15 +1,15 @@
-"""tools.py — the four registered tool handlers (spec A.3).
+"""tools.py — the three registered tool handlers (spec A.3).
 
 The contract (dev guide, "Common mistakes"): every handler returns a JSON
 string ALWAYS and NEVER raises (anything the driver throws is converted into
 a clean error JSON here), takes ``**kwargs`` for forward compatibility, and
 the schema's ``description`` is how the model decides when to call it.
 
-Mode gating (A.3.5): ``reapx_harvest`` is check_fn-hidden when
-``harvest_mode=export`` and ``reapx_import`` when it is ``browser`` (the
-conditional-availability pattern); the handlers ALSO guard, so a settings
-change mid-session can't leave a mode hole. ``reapx_status`` /
-``reapx_review`` are always registered (read-only).
+There is ONE pipeline tool (``reapx_import``): the plugin takes bookmark
+input, never drives a browser. Settings are read from the plugin config
+only; the tool args are a fixed allowlist (``path`` / ``items`` /
+``generate_limit`` / ``dry_run`` on the pipeline tool, read-only filters on
+``reapx_review``). ``reapx_status`` / ``reapx_review`` are read-only.
 
 Lazy everything: the driver (harvest.py) and the engine are imported inside
 the handlers — ``register()`` (and the validate probe's recording stub) never
@@ -30,40 +30,20 @@ def _tool_error(exc: BaseException, **extra) -> str:
                       ensure_ascii=False)
 
 
-def harvest(args: dict, **kwargs) -> str:
-    """reapx_harvest (browser mode — the product)."""
-    try:
-        mode = runtime.setting("harvest_mode", "browser", args)
-        if mode != "browser":
-            return json.dumps({
-                "ok": False, "error": "harvest_disabled_in_export_mode",
-                "detail": "harvest_mode=export hides reapx_harvest; use "
-                          "reapx_import (zero browser reads), or set "
-                          "harvest_mode=browser (applies on the next "
-                          "register()).",
-            }, ensure_ascii=False)
-        from . import harvest as _harvest
-        return json.dumps(_harvest.run_harvest(args or {}),
-                          ensure_ascii=False)
-    except BaseException as exc:  # noqa: BLE001 — never raise
-        return _tool_error(exc)
-
-
 def import_(args: dict, **kwargs) -> str:
-    """reapx_import (export mode — the strict-R11 fallback)."""
+    """reapx_import — the pipeline (a bookmarks file or inline items)."""
     try:
-        mode = runtime.setting("harvest_mode", "browser", args)
-        if mode == "browser":
-            return json.dumps({
-                "ok": False, "error": "import_disabled_in_browser_mode",
-                "detail": "harvest_mode=browser hides reapx_import; use "
-                          "reapx_harvest, or set harvest_mode=export "
-                          "(applies on the next register()).",
-            }, ensure_ascii=False)
         from . import harvest as _harvest
-        return json.dumps(_harvest.run_import(args or {}),
-                          ensure_ascii=False)
-    except BaseException as exc:  # noqa: BLE001
+        args = args or {}
+        # The allowlist: per-call data + the two per-call knobs. Anything
+        # else a model passes (harvest_mode=, enrich=, …) is ignored —
+        # settings are the user's, not the call's.
+        declared = {"path": "path", "items": "items",
+                    "generate_limit": "generate_limit",
+                    "dry_run": "dry_run"}
+        clean = {declared[k]: v for k, v in args.items() if k in declared}
+        return json.dumps(_harvest.run(clean), ensure_ascii=False)
+    except BaseException as exc:  # noqa: BLE001 — never raise
         return _tool_error(exc)
 
 
@@ -74,14 +54,15 @@ def status(args: dict, **kwargs) -> str:
         from . import skills_out
         state = _harvest._read_run_state()
         result = {"ok": True,
-                  "harvest_mode": runtime.setting("harvest_mode", "browser"),
-                  "browser": runtime.setting("browser", "auto"),
+                  "input": "file or inline items (no browser reads)",
+                  "import_dir": runtime.setting("import_dir", ""),
                   "last_run": state.get("last_run"),
                   "harvest_running": _harvest.harvest_running(),
                   "enrich": runtime.setting("enrich", "llm"),
+                  "llm_max_items": runtime.setting("llm_max_items", 50),
                   "generate_limit": runtime.setting("generate_limit", 5),
                   "register_generated_skills":
-                      runtime.setting("register_generated_skills", True)}
+                      runtime.setting("register_generated_skills", False)}
         try:
             result["skills"] = skills_out.status()
         except Exception as exc:  # a status read must never fail
@@ -144,5 +125,5 @@ def review(args: dict, **kwargs) -> str:
         return _tool_error(exc)
 
 
-HANDLERS = {"reapx_harvest": harvest, "reapx_import": import_,
-            "reapx_status": status, "reapx_review": review}
+HANDLERS = {"reapx_import": import_, "reapx_status": status,
+            "reapx_review": review}

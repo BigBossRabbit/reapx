@@ -2,31 +2,32 @@
 
 The one rule that shapes this module: **the engine keeps its standalone
 shape** (one tree, two install shapes). The standalone runs the engine as
-``python3 scripts/<x>.py`` with flat sibling imports
-(``sys.path.insert(0, scripts/)`` inside fetch_x_bookmarks.py /
-reapx_config.py); the plugin therefore imports the engine the very same way —
-through ``scripts/`` — but under its own package namespace
-(``hermes_plugins.reapx.scripts.*``), which gives:
+``python3 scripts/<x>.py`` with flat sibling imports; the plugin therefore
+imports the engine the very same way — through ``scripts/`` — but under its
+own package namespace (``hermes_plugins.reapx.scripts.*``), which gives:
 
   * zero top-level ``sys.modules`` pollution for the shared engine
     (map/categorize/assess/generate/ledger) — two plugins in one hermes never
     fight over ``generate_skills`` (ReapX's and StarLearner's differ);
   * the loader's own ``_evict_modules("hermes_plugins.reapx.*")`` evicts the
     engine on plugin reload/doctor-exit (fresh code after an update);
-  * the reapx-only fetch chain (fetch_x_bookmarks → browser_locator /
-    cdp_launcher / reapx_paths) still lands a few reapx-EXCLUSIVE top-level
-    names (its own flat imports); ``evict()`` removes exactly those via
-    ``runtime.on_unload``.
+  * the one flat sibling a plugin-path engine module still imports
+    (``reapx_paths``, from map_bookmarks_to_repos.py's own standalone-era
+    idiom) is reapx-prefixed, so it cannot collide with another plugin's
+    module; ``evict()`` removes it via ``runtime.on_unload``.
+
+The browser chain (``fetch_x_bookmarks`` / ``reapx_browser_locator`` /
+``reapx_cdp_launcher`` / ``cookie_store`` / ``reapx_config``) is NEVER
+imported by the plugin — browser mode lives in the standalone scripts. That
+is the whole point of this build: the plugin reads no browser credential
+store.
 
 Nothing hermes is imported here. ``load()`` is idempotent; every engine
-failure (e.g. the missing ``websocket-client`` import inside
-fetch_x_bookmarks, which exits at import time) is converted into a clean
-RuntimeError for the harvest error model (R12).
+failure is a clean RuntimeError for the pipeline error model (R12).
 """
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 # The shared engine, imported under the plugin's own namespace.
 # (Populated by load(); module attributes are set there so that a failed
@@ -37,41 +38,36 @@ categorize_repos = None
 assess_repos = None
 generate_skills = None
 map_bookmarks_to_repos = None
-fetch_x_bookmarks = None
 
-# Top-level module names the reapx-only fetch chain flat-imports (its own
-# standalone idiom). The shared engine never lands here (namespace imports);
-# these are evicted on plugin unload via runtime.on_unload.
-ENGINE_TOP_LEVEL = ("browser_locator", "cdp_launcher", "reapx_paths")
+# Top-level module names the engine still flat-imports (its own standalone
+# idiom). All reapx-prefixed: no collision with another plugin's module.
+ENGINE_TOP_LEVEL = ("reapx_paths",)
 
 _LOADED = False
-_FETCH_LOADED = False
 
 
 def load() -> None:
     """Import the shared engine (map / categorize / assess / generate /
-    ledger — none of it needs a browser or websocket-client, so the EXPORT
-    mode path works on any hermes). Idempotent; raises RuntimeError (never a
-    bare ImportError) when the engine cannot load.
+    ledger — none of it needs a browser or websocket-client, so the plugin
+    path works on any hermes). Idempotent; raises RuntimeError (never a bare
+    ImportError) when the engine cannot load.
 
     R09 discipline — the path-restore: the engine scripts carry their own
-    standalone-era ``sys.path.insert(0, <repo root>)`` idiom
-    (categorize/generate: "add the skill directory to path for imports" —
-    a no-op for the imports they actually do). Under the plugin it would
-    leave THE PLUGIN ROOT at ``sys.path[0]``, and every plugin root carries
-    a top-level ``tools.py``/``scripts`` package — shadowing hermes core's
-    own top-level ``tools``/``scripts`` packages for every later LAZY core
-    import (core imports ``tools.*`` lazily all over: approval contexts,
-    mcp costs, …). Everything the engine needs from the path it imports at
-    import time (the fetch chain's flat siblings land in sys.modules), so
-    the path is restored to exactly what it was after every load."""
+    standalone-era ``sys.path.insert(...)`` idiom. Under the plugin that
+    would leave THE PLUGIN ROOT at ``sys.path[0]``, and every plugin root
+    carries a top-level ``tools.py``/``scripts`` package — shadowing hermes
+    core's own top-level ``tools``/``scripts`` packages for every later
+    LAZY core import (core imports ``tools.*`` lazily all over: approval
+    contexts, mcp costs, …). Everything the engine needs from the path it
+    imports at import time (its flat sibling lands in sys.modules), so the
+    path is restored to exactly what it was after every load.
+    """
     global _LOADED, ledger, categorize_repos, assess_repos, generate_skills
     global map_bookmarks_to_repos
     if _LOADED:
         return
     saved_path = list(sys.path)
     try:
-        _boot_path()
         # Package-relative: hermes_plugins.reapx.scripts.<name> — the plugin's
         # own copy of the engine, evictable by the plugin loader, invisible
         # to any other plugin's same-named engine modules.
@@ -89,48 +85,9 @@ def load() -> None:
     _LOADED = True
 
 
-def load_fetch() -> None:
-    """Import the fetch chain (BROWSER mode only): fetch_x_bookmarks +
-    its flat siblings (browser_locator / cdp_launcher). Its guarded
-    ``websocket-client`` import (a sys.exit at import time) is converted
-    into a clean RuntimeError for the harvest error model (R12) — the
-    export path never calls this, so a missing websocket can only ever
-    produce reapx_harvest's ``dependency_missing`` error.
-
-    Same path-restore as load(): the fetcher (and its config + paths
-    siblings) carry their own ``sys.path.insert(0, <scripts dir>)``
-    flat-import idiom — the siblings land in sys.modules (their refs are
-    held), and the path goes back to what it was (never shadowing core's
-    top-level names)."""
-    global _FETCH_LOADED, fetch_x_bookmarks
-    if _FETCH_LOADED:
-        return
-    load()
-    saved_path = list(sys.path)
-    try:
-        from .scripts import fetch_x_bookmarks  # type: ignore # noqa: F401
-    except SystemExit as exc:  # the engine's guarded websocket import
-        raise RuntimeError(str(exc) or "engine dependency missing "
-                                       "(websocket-client)") from exc
-    except ImportError as exc:
-        raise RuntimeError(f"engine import failed: {exc}") from exc
-    finally:
-        sys.path[:] = saved_path
-    _FETCH_LOADED = True
-
-
-def _boot_path() -> None:
-    """The engine's own flat-import idiom (what fetch_x_bookmarks.py does
-    for its siblings): scripts/ on sys.path. Idempotent."""
-    scripts_dir = Path(__file__).resolve().parent / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-
-
 def _register_eviction() -> None:
-    # The reapx-only fetch chain flat-imports its siblings at its own import
-    # time (browser_locator / cdp_launcher / reapx_paths land top-level —
-    # reapx-exclusive names). Register their eviction.
+    # The map stage flat-imports reapx_paths at its own import time (lands
+    # top-level — a reapx-exclusive name). Register its eviction.
     from . import runtime
     runtime.on_unload(evict)
 
