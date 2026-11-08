@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""browser_locator.py — cross-platform Chromium-family browser detection.
+"""reapx_browser_locator.py — cross-platform Chromium-family browser detection.
 
 v2 portability layer (ReapX). Detects which Chromium-family browsers are
 installed on the current OS and resolves each one's cookie store path.

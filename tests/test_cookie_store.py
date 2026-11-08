@@ -5,7 +5,7 @@ Covers:
   1. cookie_store.decrypt_value against a KNOWN v10 test vector (generated
      in-test with a known key + deterministic PKCS7 padding), and the openssl
      fallback path when `cryptography` is missing.
-  2. browser_locator detects SOME browser on this machine (never a specific
+  2. reapx_browser_locator detects SOME browser on this machine (never a specific
      one — the CI macOS runner has only Chrome/Edge, the dev Mac has Brave).
   3. Every detected browser resolves cleanly to a cookie DB path (or None when
      its profile has not been created yet), and the FIRST installed browser
@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from browser_locator import (
+from reapx_browser_locator import (
     detect_os,
     get_installed_browsers,
     is_installed,

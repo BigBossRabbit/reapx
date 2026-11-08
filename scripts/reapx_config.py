@@ -2,7 +2,7 @@
 """reapx_config.py — config-driven settings for ReapX v2.
 
 Parses CLI flags (or environment variables) and auto-resolves the browser via
-browser_locator when --browser=auto.
+reapx_browser_locator when --browser=auto.
 
 CLI precedence over env:
     --browser  | REAPX_BROWSER  (default 'auto')
@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-from browser_locator import get_installed_browsers
+from reapx_browser_locator import get_installed_browsers
 
 # The data-dir seam (reapx_paths): the default output resolves through it —
 # `<repo>/data/x_bookmarks.json` standalone (unchanged), or the data dir the

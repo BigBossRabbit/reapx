@@ -78,7 +78,7 @@ class StandaloneShapeTests(unittest.TestCase):
         src = (SCRIPTS / "reapx_paths.py").read_text(encoding="utf-8")
         self.assertNotIn("import ledger", src)
         self.assertNotIn("import categorize", src)
-        self.assertNotIn("import browser_locator", src)
+        self.assertNotIn("import reapx_browser_locator", src)
 
     def test_map_main_takes_argv(self):
         src = (SCRIPTS / "map_bookmarks_to_repos.py").read_text(

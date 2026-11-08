@@ -15,13 +15,14 @@ except ImportError:
     sys.exit("ERROR: 'websocket-client' required")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from browser_locator import resolve_cookie_db
-from cdp_launcher import launch, find_free_port, cleanup
+from reapx_browser_locator import resolve_cookie_db
+from reapx_cdp_launcher import launch, find_free_port, cleanup
 
 
 class CDP:
     def __init__(self, ws_url):
-        self.ws = websocket.create_connection(ws_url, timeout=40)
+        self.ws = websocket.create_connection(ws_url, timeout=40,
+                                              suppress_origin=True)
         self.ws.settimeout(40)
         self.id = 0
 

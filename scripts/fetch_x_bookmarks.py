@@ -6,7 +6,7 @@ Architecture (no paid X API):
      browser's live 'Cookies' SQLite file into a fresh temp profile
      (READ-ONLY on the source; non-destructive). This carries the authenticated
      x.com session natively — X accepts it exactly as the real browser would.
-  2. Locate the browser binary + launch headless over CDP (cdp_launcher) on a
+  2. Locate the browser binary + launch headless over CDP (reapx_cdp_launcher) on a
      FREE port (never the hardcoded 9222) against that copied profile.
   3. Navigate to https://x.com/i/history, then repeatedly scroll to the bottom
      to trigger X's infinite load, collecting every <article> bookmark.
@@ -41,8 +41,8 @@ except ImportError:
 
 # v2 portability layer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from browser_locator import resolve_cookie_db, get_installed_browsers
-import cdp_launcher
+from reapx_browser_locator import resolve_cookie_db, get_installed_browsers
+import reapx_cdp_launcher
 from reapx_config import load_config, auto_resolve_browser
 
 # ----------------------------------------------------------------------------
@@ -53,14 +53,14 @@ SCROLL_WAIT = 1.8         # seconds between scrolls (rate-limit politely)
 CONSECUTIVE_EXHAUST = 10  # consecutive iterations with no scrollHeight growth => end
 
 # ----------------------------------------------------------------------------
-# Temp profile + headless CDP launch (v2: cdp_launcher, no pkill / no 9222)
+# Temp profile + headless CDP launch (v2: reapx_cdp_launcher, no pkill / no 9222)
 # ----------------------------------------------------------------------------
 def prepare_profile(cookie_db):
     """Copy a browser's live Cookies DB into a fresh temp user-data-dir.
 
     Returns the temp profile dir path. The source Cookies file is opened with
     copy2 (read-only on source, non-destructive); the temp dir is removed by
-    cdp_launcher.cleanup unless --keep-profile is set.
+    reapx_cdp_launcher.cleanup unless --keep-profile is set.
     """
     tmp = tempfile.mkdtemp(prefix="reapx_cdp_profile_")
     default_dir = os.path.join(tmp, "Default")
@@ -79,7 +79,10 @@ class CDP:
     """Minimal CDP client over a single websocket connection."""
 
     def __init__(self, ws_url):
-        self.ws = websocket.create_connection(ws_url, timeout=40)
+        # suppress_origin: send no Origin header, so the browser's
+        # --remote-allow-origins list cannot reject the handshake.
+        self.ws = websocket.create_connection(ws_url, timeout=40,
+                                              suppress_origin=True)
         self.ws.settimeout(40)
         self.id = 0
 
@@ -279,8 +282,8 @@ def main(argv=None):
 
     # 3. Copy live Cookies into a temp profile + launch headless on a free port.
     profile_dir = prepare_profile(cookie_db)
-    port = cfg.port if cfg.port else cdp_launcher.find_free_port()
-    proc, _ = cdp_launcher.launch(browser, profile_dir, port)
+    port = cfg.port if cfg.port else reapx_cdp_launcher.find_free_port()
+    proc, _ = reapx_cdp_launcher.launch(browser, profile_dir, port)
     browser_cdp = None
     page = None
     try:
@@ -350,7 +353,7 @@ def main(argv=None):
             page.close()
         if browser_cdp is not None:
             browser_cdp.close()
-        cdp_launcher.cleanup(proc, profile_dir, keep=cfg.keep_profile)
+        reapx_cdp_launcher.cleanup(proc, profile_dir, keep=cfg.keep_profile)
 
 
 if __name__ == "__main__":

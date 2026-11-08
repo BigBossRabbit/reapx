@@ -1,7 +1,14 @@
-# ReapX runtime dependencies.
-# `pip install -r requirements.txt` must install EVERYTHING the pipeline
-# needs — the X bookmark fetcher talks to the browser over CDP and requires
-# websocket-client (it is NOT optional, do not split it into a separate step).
+# ReapX runtime dependencies — the STANDALONE list.
+#
+# The plugin path (Hermes) needs exactly ONE of these: jinja2. The plugin
+# never imports the browser chain, so websocket-client, PyYAML, requests and
+# cryptography belong to the standalone scripts (`bash scripts/daily_sync.sh`,
+# the probes) only. One file keeps the standalone a one-command setup;
+# plugin.yaml's python_dependencies lists the plugin-path subset alone.
+#
+# `pip install -r requirements.txt` must install EVERYTHING the standalone
+# pipeline needs — the X bookmark fetcher talks to the browser over CDP and
+# requires websocket-client (it is NOT optional, do not split it out).
 jinja2>=3.0.0
 PyYAML>=6.0
 requests>=2.25.0

@@ -18,8 +18,8 @@ import pathlib
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from browser_locator import resolve_cookie_db          # noqa: E402
-from cdp_launcher import launch, find_free_port, cleanup  # noqa: E402
+from reapx_browser_locator import resolve_cookie_db          # noqa: E402
+from reapx_cdp_launcher import launch, find_free_port, cleanup  # noqa: E402
 from fetch_x_graph import CDP, new_page, wait_for_cdp, wait_for_element, js  # noqa: E402
 
 PROBE_JS = r"""

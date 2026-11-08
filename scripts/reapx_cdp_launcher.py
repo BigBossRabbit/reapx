@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cdp_launcher.py — cross-platform Chromium-family CDP launcher (v2, ROADMAP layer 3).
+"""reapx_cdp_launcher.py — cross-platform Chromium-family CDP launcher (v2, ROADMAP layer 3).
 
 Decouples "how the browser process is started and stopped" from the harvester,
 so ReapX works on macOS / Linux / Windows with any Chromium-family browser:
@@ -11,8 +11,8 @@ so ReapX works on macOS / Linux / Windows with any Chromium-family browser:
     cleanup(proc, profile_dir, keep)   -> terminate + wait + kill fallback (NO pkill),
                                           optionally remove the temp profile
 
-Binary-path knowledge lives here (imported tables from browser_locator); cookie
-paths live in browser_locator; cookie values are NEVER touched by this module.
+Binary-path knowledge lives here (imported tables from reapx_browser_locator); cookie
+paths live in reapx_browser_locator; cookie values are NEVER touched by this module.
 """
 import os
 import shutil
@@ -21,7 +21,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from browser_locator import (
+from reapx_browser_locator import (
     detect_os,
     MAC_APP_BUNDLES,
     LINUX_BINARIES,
@@ -111,6 +111,23 @@ def find_free_port():
 
 
 # ---------------------------------------------------------------------------
+# The child environment (never the whole parent env)
+# ---------------------------------------------------------------------------
+# The browser does not need — and must never inherit — the Hermes process
+# environment, which carries every configured provider key (OPENAI_API_KEY,
+# ANTHROPIC_API_KEY, …). Only what a headless Chromium actually needs to
+# start: PATH/HOME, SYSTEMROOT (Windows, mandatory), the display for the few
+# non-headless paths, and the locale.
+ENV_KEYS = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "DISPLAY",
+            "WAYLAND_DISPLAY", "LANG", "LC_ALL")
+
+
+def minimal_env():
+    """A minimal, explicit child environment (never ``os.environ`` wholesale)."""
+    return {key: os.environ[key] for key in ENV_KEYS if os.environ.get(key)}
+
+
+# ---------------------------------------------------------------------------
 # Launch / cleanup
 # ---------------------------------------------------------------------------
 def launch(browser, profile_dir, port, headless=True, extra_flags=None):
@@ -144,7 +161,9 @@ def launch(browser, profile_dir, port, headless=True, extra_flags=None):
         "--no-default-browser-check",
         "--disable-gpu",
         "--window-size=1280,2400",
-        "--remote-allow-origins=*",
+        # The debug port is open to web origins while the copied cookie jar
+        # is in the profile: allow exactly one, not "*".
+        f"--remote-allow-origins=http://127.0.0.1:{port}",
     ]
     if headless:
         cmd.insert(1, "--headless=new")
@@ -161,6 +180,7 @@ def launch(browser, profile_dir, port, headless=True, extra_flags=None):
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=minimal_env(),
         creationflags=creationflags,
     )
     return proc, port

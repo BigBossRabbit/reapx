@@ -36,8 +36,8 @@ except ImportError:
     sys.exit("ERROR: 'websocket-client' required. Run: pip3 install websocket-client")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from browser_locator import resolve_cookie_db, get_installed_browsers
-from cdp_launcher import launch, find_free_port, cleanup
+from reapx_browser_locator import resolve_cookie_db, get_installed_browsers
+from reapx_cdp_launcher import launch, find_free_port, cleanup
 
 # ---------------------------------------------------------------------------
 # Config
@@ -60,7 +60,8 @@ BIO_STRIP_TOKENS = {
 class CDP:
     def __init__(self, ws_url):
         self.ws_url = ws_url
-        self.ws = websocket.create_connection(ws_url, timeout=40)
+        self.ws = websocket.create_connection(ws_url, timeout=40,
+                                              suppress_origin=True)
         self.ws.settimeout(40)
         self.id = 0
 
@@ -70,7 +71,8 @@ class CDP:
             self.ws.close()
         except Exception:
             pass
-        self.ws = websocket.create_connection(self.ws_url, timeout=40)
+        self.ws = websocket.create_connection(self.ws_url, timeout=40,
+                                              suppress_origin=True)
         self.ws.settimeout(40)
 
     def send(self, method, params=None):

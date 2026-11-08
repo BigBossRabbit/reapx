@@ -34,8 +34,8 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_x_graph import CDP, js, wait_for_cdp, new_page, wait_for_element
-from browser_locator import resolve_cookie_db
-from cdp_launcher import launch, find_free_port, cleanup
+from reapx_browser_locator import resolve_cookie_db
+from reapx_cdp_launcher import launch, find_free_port, cleanup
 
 # ---------------------------------------------------------------------------
 # Constants

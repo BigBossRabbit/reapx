@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from browser_locator import (
+from reapx_browser_locator import (
     detect_os,
     get_installed_browsers,
     resolve_cookie_db,

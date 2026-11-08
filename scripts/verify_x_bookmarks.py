@@ -33,7 +33,7 @@ def parse_args():
 def main():
     sys.path.insert(0, str(SCRIPT_DIR))
     import cookie_store
-    from browser_locator import detect_os, get_installed_browsers
+    from reapx_browser_locator import detect_os, get_installed_browsers
     from reapx_config import auto_resolve_browser
 
     args = parse_args()

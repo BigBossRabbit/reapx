@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_cdp_launcher.py — unit tests for the ReapX v2 CDP launcher.
+"""test_reapx_cdp_launcher.py — unit tests for the ReapX v2 CDP launcher.
 
 Covers (all OS-portable — no live browser session, no real login):
   1. find_free_port() returns an int > 0 that is actually bindable.
@@ -15,6 +15,7 @@ Covers (all OS-portable — no live browser session, no real login):
 Prints PASS/SKIP/FAIL per test; exits 0 only if every (non-skipped) test
 passes.
 """
+import os
 import socket
 import sys
 import tempfile
@@ -22,8 +23,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from browser_locator import detect_os, get_installed_browsers, is_installed
-from cdp_launcher import find_free_port, locate_browser_binary, cleanup
+import reapx_cdp_launcher
+from reapx_browser_locator import detect_os, get_installed_browsers, is_installed
+from reapx_cdp_launcher import (find_free_port, locate_browser_binary,
+                                cleanup, launch, minimal_env)
 
 PASS = []
 FAIL = []
@@ -142,6 +145,71 @@ def test_cleanup_removes_profile_when_keep_false():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _capture_launch(port=9333):
+    """Run launch() against a fake binary + fake Popen; return (cmd, kwargs)."""
+    calls = {}
+    real_locate = reapx_cdp_launcher.locate_browser_binary
+    real_popen = reapx_cdp_launcher.subprocess.Popen
+
+    class FakeProc:
+        pass
+
+    def fake_popen(cmd, **kwargs):
+        calls["cmd"] = list(cmd)
+        calls["kwargs"] = dict(kwargs)
+        return FakeProc()
+
+    reapx_cdp_launcher.locate_browser_binary = lambda _b: "/bin/true"
+    reapx_cdp_launcher.subprocess.Popen = fake_popen
+    try:
+        proc, got_port = launch("brave", "/tmp/reapx_test_profile", port)
+    finally:
+        reapx_cdp_launcher.locate_browser_binary = real_locate
+        reapx_cdp_launcher.subprocess.Popen = real_popen
+    return calls["cmd"], calls["kwargs"], got_port
+
+
+def test_allow_origins_is_the_loopback_origin_only():
+    """Review point 2: no --remote-allow-origins=* — exactly one origin,
+    the loopback at the actual port."""
+    cmd, _, port = _capture_launch(9333)
+    origins = [c for c in cmd if c.startswith("--remote-allow-origins")]
+    check("exactly one --remote-allow-origins flag", len(origins) == 1,
+          f"got {origins!r}")
+    check("origin is http://127.0.0.1:<port>, not *",
+          origins == [f"--remote-allow-origins=http://127.0.0.1:{port}"],
+          f"got {origins!r}")
+    check("the port in the origin is the debug port",
+          f"--remote-debugging-port={port}" in cmd,
+          f"cmd={cmd!r}")
+    check("no bare * anywhere in the flags",
+          "--remote-allow-origins=*" not in cmd)
+
+
+def test_minimal_env_never_inherits_the_parent():
+    """Review point 4: the child gets an explicit env, not the Hermes env
+    (which carries every provider key)."""
+    os.environ["REAPX_TEST_PROVIDER_KEY"] = "sk-not-a-real-key"
+    try:
+        _, kwargs, _ = _capture_launch(9334)
+    finally:
+        os.environ.pop("REAPX_TEST_PROVIDER_KEY", None)
+    env = kwargs.get("env")
+    check("launch passes an explicit env=", isinstance(env, dict),
+          f"got {env!r}")
+    check("the sentinel provider key is NOT inherited",
+          "REAPX_TEST_PROVIDER_KEY" not in (env or {}))
+    check("every env key is on the minimal allowlist",
+          set(env or {}) <= set(reapx_cdp_launcher.ENV_KEYS),
+          f"got {sorted(env or {})}")
+    check("PATH survives when the parent has it",
+          ("PATH" not in os.environ) or ("PATH" in (env or {})))
+    check("HOME survives when the parent has it",
+          ("HOME" not in os.environ) or ("HOME" in (env or {})))
+    check("the built env is minimal_env()",
+          minimal_env() == env, "minimal_env() and the launch env differ")
+
+
 def test_cleanup_keeps_profile_when_keep_true():
     tmp = tempfile.mkdtemp(prefix="reapx_cleanup_keep_")
     try:
@@ -160,6 +228,8 @@ def main():
     test_locate_unknown_browser_none()
     test_cleanup_dead_proc_and_missing_dir()
     test_cleanup_removes_profile_when_keep_false()
+    test_allow_origins_is_the_loopback_origin_only()
+    test_minimal_env_never_inherits_the_parent()
     test_cleanup_keeps_profile_when_keep_true()
     print()
     print(f"{len(PASS)} passed, {len(FAIL)} failed")

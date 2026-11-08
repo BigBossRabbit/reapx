@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from browser_locator import (
+from reapx_browser_locator import (
     detect_os,
     KEYCHAIN_SERVICES,
     resolve_cookie_db,
@@ -121,7 +121,7 @@ def _local_state_path(browser, profile):
         base = Path.home() / ".config"
     else:
         return None
-    from browser_locator import APP_DIRS
+    from reapx_browser_locator import APP_DIRS
     app_dir = APP_DIRS.get(browser)
     if not app_dir:
         return None
@@ -183,7 +183,7 @@ def resolve_key_windows(browser="chrome", profile="Default"):
     except ImportError:
         raise RuntimeError(
             "Windows cookie decryption requires pywin32: pip install pywin32")
-    from browser_locator import APP_DIRS
+    from reapx_browser_locator import APP_DIRS
     lap = os.environ.get("LOCALAPPDATA")
     if not lap:
         raise RuntimeError("LOCALAPPDATA not set")

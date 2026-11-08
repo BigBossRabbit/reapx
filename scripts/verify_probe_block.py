@@ -5,14 +5,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_x_graph import CDP, js, wait_for_cdp, new_page, wait_for_element
-from browser_locator import resolve_cookie_db
-from cdp_launcher import launch, find_free_port
+from reapx_browser_locator import resolve_cookie_db
+from reapx_cdp_launcher import launch, find_free_port
 
 # The X handle to probe (pass one as the first argument).
 HANDLE = sys.argv[1] if len(sys.argv) > 1 else 'target-handle'
 
 # Best-effort cleanup of stale headless CDP browsers from an earlier crashed
-# run (the standalone X-graph tools' own hygiene; the plugin's cdp_launcher
+# run (the standalone X-graph tools' own hygiene; the plugin's reapx_cdp_launcher
 # path never needs this — it terminates its own process). argv-list form:
 # no shell, no os.system.
 try:

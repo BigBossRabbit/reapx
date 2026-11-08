@@ -4,7 +4,7 @@
 Covers:
   1. --browser chrome / edge explicit flags are honored.
   2. auto resolution: load_config --browser auto returns a known browser name
-     (first installed, per browser_locator) — portable across OSes.
+     (first installed, per reapx_browser_locator) — portable across OSes.
   3. Defaults: profile 'Default', port 0 (auto-free), output data/x_bookmarks.json.
   4. CLI overrides: --output, --keep-profile, --max-scrolls, --port.
   5. Env var fallbacks (REAPX_BROWSER, REAPX_OUTPUT) when no CLI flag given.
@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from browser_locator import KNOWN_BROWSERS, get_installed_browsers
+from reapx_browser_locator import KNOWN_BROWSERS, get_installed_browsers
 from reapx_config import load_config, auto_resolve_browser, DEFAULT_OUTPUT
 
 PASS = []
