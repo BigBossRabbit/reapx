@@ -590,7 +590,7 @@ def detect_username(page):
         const links = document.querySelectorAll('a[href]');
         for (const a of links) {
             const href = a.getAttribute('href') || '';
-            if (href.match(/^\/[A-Za-z0-9_]{3,15}$/)) {
+            if (href.match(/^\\/[A-Za-z0-9_]{3,15}$/)) {
                 const label = a.getAttribute('aria-label') || '';
                 if (label.toLowerCase().includes('profile') || label.toLowerCase().includes('your')) {
                     return href.slice(1);
