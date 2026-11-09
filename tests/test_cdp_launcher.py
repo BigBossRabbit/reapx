@@ -170,14 +170,16 @@ def _capture_launch(port=9333):
 
 
 def test_allow_origins_is_the_loopback_origin_only():
-    """Review point 2: no --remote-allow-origins=* — exactly one origin,
-    the loopback at the actual port."""
+    """Review point 2: no --remote-allow-origins=* — only the two loopback
+    spellings at the actual port (the clients probe [::1] first, then
+    127.0.0.1)."""
     cmd, _, port = _capture_launch(9333)
     origins = [c for c in cmd if c.startswith("--remote-allow-origins")]
     check("exactly one --remote-allow-origins flag", len(origins) == 1,
           f"got {origins!r}")
-    check("origin is http://127.0.0.1:<port>, not *",
-          origins == [f"--remote-allow-origins=http://127.0.0.1:{port}"],
+    allowed = origins[0].split("=", 1)[1].split(",") if origins else []
+    check("both allowed origins are loopback at the debug port",
+          allowed == [f"http://127.0.0.1:{port}", f"http://[::1]:{port}"],
           f"got {origins!r}")
     check("the port in the origin is the debug port",
           f"--remote-debugging-port={port}" in cmd,

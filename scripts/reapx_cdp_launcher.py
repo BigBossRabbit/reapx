@@ -162,8 +162,12 @@ def launch(browser, profile_dir, port, headless=True, extra_flags=None):
         "--disable-gpu",
         "--window-size=1280,2400",
         # The debug port is open to web origins while the copied cookie jar
-        # is in the profile: allow exactly one, not "*".
-        f"--remote-allow-origins=http://127.0.0.1:{port}",
+        # is in the profile: allow exactly the two loopback spellings, never
+        # "*". (The clients probe [::1] first, then 127.0.0.1; they also send
+        # no Origin header at all — see suppress_origin — so this is belt and
+        # braces for any other local client.)
+        "--remote-allow-origins="
+        f"http://127.0.0.1:{port},http://[::1]:{port}",
     ]
     if headless:
         cmd.insert(1, "--headless=new")
