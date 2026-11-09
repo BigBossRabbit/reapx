@@ -251,15 +251,14 @@ plugin to process what it produced, point `reapx_import.path` (or
 
 The mechanics, for the record: cookie values are never decrypted, read,
 logged, printed or persisted by the fetcher — it copies a file and lets the
-browser itself authenticates, as designed. The CDP port answers only to the
-two loopback spellings (`http://127.0.0.1:<port>`, `http://[::1]:<port>`) —
-never a `*` origin wildcard — and the browser child
-gets a **minimal environment** (`PATH`, `HOME`, `USERPROFILE`,
-`SYSTEMROOT`, `DISPLAY`, `WAYLAND_DISPLAY`, `LANG`, `LC_ALL`) rather than
-the whole Hermes process environment with every provider key in it. An
-expired login is detected as a redirect and reported as a clean error. The
-one Keychain touch in the repo is the optional standalone smoke test
-`verify_x_bookmarks.py`.
+browser authenticate, as designed. The CDP port answers only to the two
+loopback spellings (`http://127.0.0.1:<port>`, `http://[::1]:<port>`) —
+never a `*` origin wildcard — and the browser child gets a **minimal
+environment** (`PATH`, `HOME`, `USERPROFILE`, `SYSTEMROOT`, `DISPLAY`,
+`WAYLAND_DISPLAY`, `LANG`, `LC_ALL`) rather than the whole Hermes process
+environment with every provider key in it. An expired login is detected as a
+redirect and reported as a clean error. The one Keychain touch in the repo is
+the optional standalone smoke test `verify_x_bookmarks.py`.
 
 **The seam we asked for.** A plugin-side browser capability is still the
 better long-term home for this, so we filed
