@@ -13,6 +13,13 @@ tags: [x, twitter, bookmarks, skills, automation, cdp, chromium]
 Harvest what you saved on X. ReapX turns your X (Twitter) bookmarks into reusable
 Hermes AI skills — without paying for the X API.
 
+**Two shapes, one repo.** As a **plugin** it takes bookmark data (an inline array
+the agent collected with Hermes's own browser tool, or a file) and runs the skill
+pipeline — it never touches a browser itself. As a **standalone skill** (this
+document's run instructions) it also does the capture: it drives your own
+logged-in browser over CDP. Both share the same map → categorize → assess →
+generate engine.
+
 ## When to Use
 
 - You want your bookmarked X threads, tools, and links turned into runnable Hermes skills.

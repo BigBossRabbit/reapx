@@ -3,8 +3,14 @@
 > **Status: v2 is implemented and live on `main`.** This document is kept as the
 > design record. The fetcher now works on **any Chromium-family browser**
 > (Brave, Chrome, Edge, Arc, Opera) and **any desktop OS** (macOS, Linux,
-> Windows) — see `scripts/browser_locator.py`, `scripts/cdp_launcher.py`, and
+> Windows) — see `scripts/reapx_browser_locator.py`, `scripts/reapx_cdp_launcher.py`, and
 > `scripts/reapx_config.py` for the shipped implementation.
+>
+> **Where this runs today:** the **standalone** scripts, run by hand. The
+> plugin install shape takes bookmark data only and imports none of this
+> browser chain; the host-side seam that would bring it back inside a plugin
+> is filed as
+> [hermes-agent#150960](https://github.com/NousResearch/hermes-agent/issues/150960).
 
 ## Why v1 was Brave/macOS-only (the coupling)
 The fetcher has hardcoded assumptions:
@@ -17,7 +23,7 @@ The fetcher has hardcoded assumptions:
 
 ## v2 architecture — decouple "browser session" from "harvester"
 
-### 1. Browser detection layer (new `browser_locator.py`)
+### 1. Browser detection layer (new `reapx_browser_locator.py`)
 Detect the user's installed Chromium-family browser(s) and their cookie store:
 - macOS: Brave, Chrome, Edge, Arc, Opera — each has a known
   `~/Library/Application Support/<Browser>/<Profile>/Cookies` + Keychain service
@@ -34,7 +40,7 @@ One interface, platform implementations:
 - Linux → libsecret / keyring
 - Windows → DPAPI
 
-### 3. CDP launch abstraction (new `cdp_launcher.py`)
+### 3. CDP launch abstraction (new `reapx_cdp_launcher.py`)
 - Locate the browser binary per OS (`which`, `/Applications`, `%ProgramFiles%`)
 - Launch headless with `--remote-debugging-port` on a **free** port (not hardcoded 9222)
 - Cross-platform process cleanup (no `pkill`; use `proc.terminate()` + `os.kill`)

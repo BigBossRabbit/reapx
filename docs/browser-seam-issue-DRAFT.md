@@ -1,13 +1,14 @@
-# DRAFT — the browser-seam issue (catalog rule 11, "ask for a hook")
+# The browser-seam issue — filed upstream as #150960
 
-> **Status: DRAFT — to be filed on
-> `github.com/NousResearch/hermes-agent/issues` by the operator BEFORE the
-> catalog PRs open (both plugins point at it). Never file it from a
-> build mission.** Title tags: `plugins`, `catalog`, `security`. Quote
-> R11 + the "ask for a hook" section in the issue body so the
-> maintainers see we read their own words back to them.
+<https://github.com/NousResearch/hermes-agent/issues/150960>
 
----
+Kept in-tree as the record of what was asked for and why (catalog rule 11's
+"ask for a hook"). The text below is the issue body as filed; the two
+`harvest_mode` values in it name the two shapes the plugin offered **at filing
+time** (browser inside the plugin). The shipped plugin has since dropped
+browser mode — it is data-in only, and the browser path is the standalone
+scripts — so read those two lines as the historical posture, not as current
+settings.
 
 > **Title:** Plugin surface for consented, read-only access to the user's
 > own logged-in browser profile (a browser-session seam for

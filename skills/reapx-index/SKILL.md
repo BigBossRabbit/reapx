@@ -9,15 +9,17 @@ tags: [reapx, index, generated, bookmarks]
 
 # ReapX index
 
-The `reapx` plugin turns the user's X (Twitter) bookmarks — harvested from
-their own logged-in browser, no paid X API — into namespaced, read-only
-Hermes skills. **This index skill is the one that is always there from
-install; everything else under the `reapx:` namespace was generated from a
-bookmark the user saved.**
+The `reapx` plugin turns the user's X (Twitter) bookmarks — fetched by the
+agent with Hermes's own browser tool, or supplied as a file — into
+namespaced, read-only Hermes skills. **This index skill is the one that is
+always there from install; everything else under the `reapx:` namespace was
+generated from a bookmark the user saved.** The plugin never reads a browser
+profile itself: bookmark capture is the host browser tool (inline `items`) or
+the standalone scripts (a `path` file).
 
 ## What is there and how to find it
 
-- **`reapx_status`** — the read-only state: harvest mode, last run, the
+- **`reapx_status`** — the read-only state: last run, the
   seen-ledger counts (total seen / new last run), every registered
   `reapx:<name>` skill, the last two-track assessment, the LLM enrichment
   state, and pending review items.
@@ -25,10 +27,13 @@ bookmark the user saved.**
   with its text, category, two-track assessment
   (integrate-into-makeup / business-opportunity) and the generated skill.
   LLM-derived opportunities land here, never silently in the ledger.
-- **`skill_view("reapx:<name>")`** — every generated skill is loadable with
-  its qualified name (also listed by `reapx_status` and `skills_list`).
-- **`reapx_harvest`** (browser mode) / **`reapx_import`** (export mode) —
-  the harvest tools (see `plugin.yaml`'s settings for the modes).
+- **`skill_view("reapx:<name>")`** — a generated skill is loadable with its
+  qualified name once it is registered (also listed by `reapx_status` and
+  `skills_list`).
+- **`reapx_import`** — the one pipeline tool: `path` (a bookmarks file) or
+  `items` (an array the agent collected itself), plus `generate_limit`
+  (lower-only) and `dry_run`. Settings come from the plugin config, never
+  from arguments.
 
 ## What the categories mean
 
@@ -53,7 +58,9 @@ always win over LLM ones. With `enrich: rules`, zero LLM calls run at all.
   `skill_view("reapx:<name>")`.
 - *"what did ReapX give me?"* — `reapx_status`.
 - *"check the new ones"* — `reapx_review` (default: the last run).
-- *"refresh from my bookmarks"* — `reapx_harvest` (browser mode).
+- *"refresh from my bookmarks"* — collect the current bookmarks with the
+  browser tool and call `reapx_import` with them as `items` (or point `path`
+  at a file the standalone fetcher wrote). There is no browser-mode tool.
 
 ## Provenance + privacy
 
